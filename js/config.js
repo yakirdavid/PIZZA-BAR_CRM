@@ -4,8 +4,8 @@
 
 // Supabase (מומלץ): Project Settings → API
 export const supabaseConfig = {
-  url: '', // לדוגמה: https://abcdefgh.supabase.co
-  anonKey: '', // anon public / publishable key
+  url: 'https://cbjxqpwvhdxnulilkzzx.supabase.co',
+  anonKey: 'sb_publishable_FYCiIVwcBldpU13cjYqqGQ_6m6ILIFA',
 };
 
 // חלופה: Firebase (משמש רק אם Supabase לא הוגדר)
