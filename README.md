@@ -2,7 +2,7 @@
 
 מערכת Web בעברית מלאה (RTL), שעובדת במחשב ובנייד, ליצירה, שמירה וניהול של הצעות מחיר לאירועים ולהפקת PDF ממותג לפי תבנית ההצעה המאושרת.
 
-**עלות: 0 ₪.** האתר הוא קבצים סטטיים (GitHub Pages / Netlify / Cloudflare Pages, כולם חינמיים), והנתונים נשמרים ב-Firebase בתוכנית החינמית (Spark).
+**עלות: 0 ₪.** האתר הוא קבצים סטטיים (GitHub Pages / Netlify / Cloudflare Pages, כולם חינמיים), והנתונים נשמרים ב-Supabase בתוכנית החינמית. Firebase נתמך כחלופה.
 
 ## מה יש במערכת
 
@@ -27,22 +27,28 @@
 
 ---
 
-## הפעלה – שלב 1: חיבור מסד נתונים חינמי (Firebase)
+## הפעלה – שלב 1: חיבור מסד נתונים חינמי (Supabase)
 
 בלי השלב הזה המערכת עובדת ב"מצב מקומי": הנתונים נשמרים רק בדפדפן שבו עובדים, ואין כניסה עם סיסמה. כדי לעבוד מכל מכשיר עם כניסה מאובטחת:
 
-1. נכנסים ל-<https://console.firebase.google.com> עם חשבון Google ← **Create a project** (אפשר לוותר על Google Analytics).
-2. **Build → Authentication → Get started → Sign-in method → Email/Password → Enable**.
-3. **Authentication → Users → Add user**: מזינים את האימייל והסיסמה שלכם. זה המשתמש היחיד של המערכת.
-4. **Build → Firestore Database → Create database** ← בוחרים מיקום (למשל `eur3`) ← **Production mode**.
-5. בלשונית **Rules** של Firestore מדביקים את התוכן של הקובץ `firestore.rules` מהמאגר ולוחצים **Publish**.
-6. **Project settings (גלגל השיניים) → General → Your apps → Web (`</>`)** ← רושמים אפליקציה ← מעתיקים את אובייקט `firebaseConfig`.
-7. מדביקים את הערכים בקובץ `js/config.js` ושומרים או עושים commit.
-8. אחרי שהאתר עולה לאוויר (שלב 2): **Authentication → Settings → Authorized domains → Add domain** ומוסיפים את כתובת האתר, למשל `yakirdavid.github.io`.
+1. ב-<https://supabase.com/dashboard> פותחים פרויקט חדש (**New project**), או משתמשים בפרויקט קיים.
+2. **SQL Editor → New query**: מדביקים את כל התוכן של הקובץ `supabase.sql` מהמאגר ולוחצים **Run**. הסקריפט יוצר את הטבלה, את חוקי האבטחה (RLS) ואת המספור האוטומטי.
+3. **Authentication → Users → Add user → Create new user**: מזינים אימייל וסיסמה ומסמנים **Auto Confirm User**. זה המשתמש היחיד של המערכת.
+4. **Authentication → Sign In / Providers**: מכבים את **Allow new users to sign up**, כדי שאף אחד אחר לא יוכל לפתוח חשבון.
+5. **Project Settings → API** (או **API Keys**): מעתיקים את **Project URL** ואת המפתח הציבורי (**anon public** / **publishable**). **לא** את ה-`service_role` / `secret`.
+6. מדביקים את שני הערכים בקובץ `js/config.js` בתוך `supabaseConfig`, ושומרים או עושים commit.
+7. אחרי שהאתר עולה לאוויר (שלב 2): **Authentication → URL Configuration → Site URL** ← כותבים את כתובת האתר. זה נדרש כדי שקישור "שכחתי סיסמה" יחזיר אליו.
 
-ערכי `firebaseConfig` אינם סודיים. ההגנה על הנתונים מגיעה מהכניסה ומחוקי Firestore, שמאפשרים לכל משתמש גישה רק לנתונים שלו.
+המפתח הציבורי אינו סודי. ההגנה על הנתונים מגיעה מהכניסה ומחוקי ה-RLS, שמאפשרים לכל משתמש גישה רק לשורות שלו.
 
-אם עבדתם קודם במצב מקומי: מורידים גיבוי במסך ההגדרות לפני החיבור ל-Firebase, ומשחזרים אותו אחרי הכניסה.
+**שימו לב – השהיה של פרויקט חינמי:** Supabase משהה פרויקט חינמי אחרי שבוע בלי שום פעילות. הנתונים לא נמחקים, ואפשר להחזיר את הפרויקט בלחיצה בלוח הבקרה. כדי למנוע את ההשהיה, המאגר כולל workflow שפונה למסד הנתונים כל 3 ימים. כדי להפעיל אותו מוסיפים ב-GitHub, ב-**Settings → Secrets and variables → Actions**, שני Secrets: `SUPABASE_URL` ו-`SUPABASE_ANON_KEY`. כדאי לדעת ש-GitHub עוצר workflows מתוזמנים אחרי 60 יום בלי שינויים במאגר, ושולח מייל לפני שהוא עושה את זה.
+
+אם עבדתם קודם במצב מקומי: מורידים גיבוי במסך ההגדרות לפני החיבור, ומשחזרים אותו אחרי הכניסה.
+
+### חלופה: Firebase
+
+אם מעדיפים Firebase, משאירים את `supabaseConfig` ריק וממלאים את `firebaseConfig`:
+צריך להפעיל Authentication מסוג Email/Password, להוסיף משתמש, ליצור Firestore Database ולהדביק בו את החוקים מהקובץ `firestore.rules`.
 
 ## הפעלה – שלב 2: העלאת האתר (חינם)
 
@@ -51,7 +57,7 @@
 2. ב-GitHub: **Settings → Pages → Source: GitHub Actions**.
 3. בכל push ל-`main` האתר מתעדכן, בכתובת `https://<user>.github.io/<repo>/`.
 
-GitHub Pages חינמי למאגר ציבורי. גם אם המאגר ציבורי, הנתונים עצמם (לקוחות והצעות) לא נמצאים בו, אלא רק ב-Firebase מאחורי כניסה. אם המאגר פרטי ואין לכם חשבון GitHub בתשלום, השתמשו באפשרות ב'.
+GitHub Pages חינמי למאגר ציבורי. גם אם המאגר ציבורי, הנתונים עצמם (לקוחות והצעות) לא נמצאים בו, אלא רק במסד הנתונים מאחורי כניסה. אם המאגר פרטי ואין לכם חשבון GitHub בתשלום, השתמשו באפשרות ב'.
 
 **אפשרות ב' – Netlify או Cloudflare Pages** (חינמי גם למאגר פרטי): מחברים את המאגר, ומשאירים את פקודת ה-build ריקה ואת תיקיית הפרסום `/`.
 
@@ -62,7 +68,7 @@ npm start        # שרת מקומי בכתובת http://localhost:8080
 npm test         # בדיקות למנוע חישוב המחיר
 ```
 
-אין שלב build, ואין צורך להתקין חבילות. הספריות נמצאות בתיקייה `vendor/` (jsPDF ו-html-to-image) והגופן Heebo נמצא בתיקייה `assets/fonts/`.
+אין שלב build, ואין צורך להתקין חבילות. הספריות נמצאות בתיקייה `vendor/` (jsPDF, html-to-image ו-supabase-js) והגופן Heebo נמצא בתיקייה `assets/fonts/`.
 
 ### מבנה הקבצים
 
@@ -72,8 +78,9 @@ npm test         # בדיקות למנוע חישוב המחיר
 | `js/app.js` | ממשק: רשימה, טופס, תצוגה, לקוחות, הגדרות, כניסה |
 | `js/pricing.js` | מנוע החישוב (משמש את הטופס, התצוגה וה-PDF) |
 | `js/quote-render.js` | תבנית מסמך ההצעה, חלוקה לעמודים והפקת PDF |
-| `js/store.js` | שכבת נתונים: Firebase או מצב מקומי |
+| `js/store.js` | שכבת נתונים: Supabase, Firebase או מצב מקומי |
 | `js/defaults.js` | ברירות מחדל: מחירון, תנאים ותפריט |
-| `js/config.js` | הגדרות החיבור ל-Firebase |
+| `js/config.js` | הגדרות החיבור למסד הנתונים |
+| `supabase.sql` | יצירת הטבלה וחוקי האבטחה ב-Supabase |
 | `css/quote.css` | עיצוב מסמך ההצעה (A4) |
 | `firestore.rules` | חוקי אבטחה למסד הנתונים |

@@ -1,9 +1,11 @@
-// שכבת נתונים: Firebase (ענן, חינמי) או מצב מקומי (localStorage) כשאין הגדרות Firebase.
-import { firebaseConfig } from './config.js';
+// שכבת נתונים: Supabase או Firebase (ענן, חינמי), או מצב מקומי (localStorage) כשאין הגדרות.
+import { supabaseConfig, firebaseConfig } from './config.js';
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 
-export const isCloud = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+const useSupabase = Boolean(supabaseConfig.url && supabaseConfig.anonKey);
+const useFirebase = !useSupabase && Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+export const isCloud = useSupabase || useFirebase;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -24,7 +26,7 @@ class LocalStore {
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      throw new Error('האחסון בדפדפן מלא – מומלץ לעבור למצב ענן (Firebase). ' + e.message);
+      throw new Error('האחסון בדפדפן מלא – מומלץ לחבר את Supabase. ' + e.message);
     }
   }
 
@@ -207,10 +209,147 @@ class CloudStore {
   }
 }
 
+// ---------- מצב ענן (Supabase Auth + Postgres) ----------
+// כל הנתונים בטבלה אחת pb_docs (ראו supabase.sql), מוגנת ב-RLS לפי המשתמש המחובר.
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = res;
+    s.onerror = () => rej(new Error('טעינת ' + src + ' נכשלה'));
+    document.head.append(s);
+  });
+}
+
+class SupabaseStore {
+  mode = 'cloud';
+  user = null;
+
+  async init() {
+    if (!window.supabase) await loadScript('vendor/supabase.js');
+    this.sb = window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+    return this;
+  }
+
+  _check({ data, error }) {
+    if (error) throw new Error(error.message);
+    return data;
+  }
+  _table() {
+    return this.sb.from('pb_docs');
+  }
+  async _get(kind, id) {
+    const rows = this._check(await this._table().select('data').eq('kind', kind).eq('id', id).limit(1));
+    return rows[0]?.data ?? null;
+  }
+  async _put(kind, id, data) {
+    this._check(
+      await this._table().upsert(
+        { user_id: this.user.id, kind, id, data, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id,kind,id' }
+      )
+    );
+  }
+  async _all(kind) {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const rows = this._check(await this._table().select('id,data').eq('kind', kind).range(from, from + 999));
+      out.push(...rows);
+      if (rows.length < 1000) return out;
+    }
+  }
+
+  onAuth(cb) {
+    let current;
+    const emit = (u) => {
+      this.user = u;
+      if ((u?.id ?? null) === current) return; // רענון טוקן לא מרנדר מחדש
+      current = u?.id ?? null;
+      cb(u);
+    };
+    this.sb.auth.onAuthStateChange((event, session) => {
+      emit(session?.user ?? null);
+      if (event === 'PASSWORD_RECOVERY') setTimeout(() => this._askNewPassword(), 300);
+    });
+  }
+  async _askNewPassword() {
+    const pw = prompt('הזינו סיסמה חדשה (לפחות 6 תווים):');
+    if (!pw) return;
+    const { error } = await this.sb.auth.updateUser({ password: pw });
+    alert(error ? 'עדכון הסיסמה נכשל: ' + error.message : 'הסיסמה עודכנה');
+  }
+  async signIn(email, password) {
+    this._check(await this.sb.auth.signInWithPassword({ email, password }));
+  }
+  async signOut() {
+    await this.sb.auth.signOut();
+  }
+  async resetPassword(email) {
+    this._check(
+      await this.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname })
+    );
+  }
+
+  async getSettings() {
+    return this._get('settings', 'main');
+  }
+  async saveSettings(s) {
+    await this._put('settings', 'main', s);
+  }
+  async listQuotes() {
+    return (await this._all('quote')).map((r) => r.data);
+  }
+  async getQuote(id) {
+    return this._get('quote', id);
+  }
+  async saveQuote(q) {
+    if (!q.id) q.id = uid();
+    await this._put('quote', q.id, JSON.parse(JSON.stringify(q)));
+    return q;
+  }
+  async deleteQuote(id) {
+    this._check(await this._table().delete().eq('kind', 'quote').eq('id', id));
+  }
+  async nextNumber(start) {
+    return this._check(await this.sb.rpc('pb_next_number', { start_at: start }));
+  }
+  async saveImage(dataUrl) {
+    const id = uid();
+    await this._put('image', id, dataUrl);
+    return 'img:' + id;
+  }
+  async _loadImage(id) {
+    return this._get('image', id);
+  }
+  async exportAll() {
+    return {
+      settings: await this.getSettings(),
+      quotes: await this.listQuotes(),
+      images: Object.fromEntries((await this._all('image')).map((r) => [r.id, r.data])),
+      counter: await this._get('counter', 'quote'),
+    };
+  }
+  async importAll(data) {
+    if (data.settings) await this.saveSettings(data.settings);
+    for (const q of data.quotes || []) await this.saveQuote(q);
+    for (const [id, d] of Object.entries(data.images || {})) await this._put('image', id, d);
+    if (data.counter != null) {
+      const cur = Number((await this._get('counter', 'quote')) ?? 0);
+      await this._put('counter', 'quote', Math.max(cur, Number(data.counter)));
+    }
+  }
+}
+
 const imageCache = new Map();
 
 export async function createStore() {
-  const store = isCloud ? await new CloudStore().init() : new LocalStore();
+  const store = useSupabase
+    ? await new SupabaseStore().init()
+    : useFirebase
+      ? await new CloudStore().init()
+      : new LocalStore();
   // הפניה לתמונה: נתיב קובץ / data URL / 'img:<id>' (תמונה שהועלתה)
   store.resolveImage = async (ref) => {
     if (!ref || !String(ref).startsWith('img:')) return ref || '';
