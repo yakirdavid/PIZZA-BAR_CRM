@@ -9,7 +9,7 @@ export const STATUSES = [
 ];
 
 export const DEFAULT_SETTINGS = {
-  schema: 1,
+  schema: 2,
   numbering: { start: 1001 },
   business: {
     name: 'PIZZA-BAR בטאבון',
@@ -34,7 +34,16 @@ export const DEFAULT_SETTINGS = {
     infantToAge: 2,
     childFactor: 0.5,
   },
-  eventTypes: ['חתונה', 'יום הולדת', 'אירוע חברה', 'מסיבה', 'אחר'],
+  eventTypes: ['מסיבת רווקות', 'מסיבת רווקים', 'חתונה', 'יום הולדת', 'אירוע חברה', 'מסיבה', 'אחר'],
+  // ברירות מחדל להצעה חדשה – ניתן לשנות בהגדרות
+  quoteDefaults: {
+    eventType: 'מסיבת רווקות',
+    packageId: 'full',
+    pizzaCount: 5,
+    startTime: '',
+    showBreakdown: true,
+    validatePhone: true,
+  },
   packages: [
     {
       id: 'full',
@@ -78,13 +87,13 @@ export const DEFAULT_SETTINGS = {
     { title: 'הגשה ומיתוג', text: 'הגשה לשולחן בופה במגשים ייעודיים. אפשרות למיתוג אישי של המגשים בתיאום מראש.' },
     { title: 'חומרי גלם מובחרים', text: 'בצק איכותי בהתפחה איטית של 72 שעות, חומרי גלם טריים ומגוון תוספות וטעמים.' },
   ],
-  menuNote: 'כשבוע לפני מועד האירוע יש לבחור 6 סוגי פיצות מתוך תפריט הפיצות.',
-  // תנאים – ניתן להשתמש במשתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים}
+  menuNote: 'כשבוע לפני מועד האירוע יש לבחור {מספר_פיצות} סוגי פיצות מתוך תפריט הפיצות.',
+  // תנאים – ניתן להשתמש במשתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים} {מספר_פיצות}
   terms: [
     'מקדמה לשריון התאריך: {מקדמה}. המקדמה היא חלק מסכום ההצעה ומופחתת מהיתרה.',
     'יתרת התשלום ({יתרה}) תשולם עד 3 ימי עסקים לאחר האירוע.',
     'תנאי ביטול: ביטול 21 ימים ומעלה לפני האירוע – החזר מלא; ביטול 8–20 ימים לפני האירוע – דמי ביטול בסך {דמי_ביטול_חלקיים} (50% מהמקדמה); ביטול 7 ימים או פחות לפני האירוע – דמי ביטול בגובה המקדמה.',
-    'עדכון כמות המשתתפים ובחירת 6 סוגי פיצות מהתפריט – כשבוע לפני מועד האירוע.',
+    'עדכון כמות המשתתפים ובחירת {מספר_פיצות} סוגי פיצות מהתפריט – כשבוע לפני מועד האירוע.',
     'מועד האירוע, מיקום האירוע ושעות ההגשה ייקבעו בתיאום מראש.',
     'תנאי הביטול כפופים לדין החל.',
   ],
@@ -128,8 +137,17 @@ export function withDefaults(saved) {
   const d = clone(DEFAULT_SETTINGS);
   if (!saved) return d;
   const out = { ...d, ...saved };
-  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu']) {
+  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu', 'quoteDefaults']) {
     out[k] = { ...d[k], ...(saved[k] || {}) };
+  }
+  if ((saved.schema || 1) < 2) {
+    // גרסה 2: סוגי אירוע חדשים ומספר פיצות גמיש
+    const missing = ['מסיבת רווקות', 'מסיבת רווקים'].filter((t) => !out.eventTypes.includes(t));
+    out.eventTypes = [...missing, ...out.eventTypes];
+    const pizzaVar = (t) => String(t).replace(/\b6 סוגי פיצות/g, '{מספר_פיצות} סוגי פיצות');
+    out.menuNote = pizzaVar(out.menuNote);
+    out.terms = out.terms.map(pizzaVar);
+    out.schema = 2;
   }
   return out;
 }

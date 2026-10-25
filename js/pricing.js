@@ -33,6 +33,11 @@ function lineTotal(item) {
   return item.unit === 'fixed' ? money(item.price) : money(num(item.price) * num(item.qty));
 }
 
+export function pricingModeOf(q) {
+  if (q.pricing?.mode) return q.pricing.mode;
+  return isSet(q.overrides?.packagePrice) ? 'total' : 'auto'; // הצעות ישנות
+}
+
 // q – אובייקט הצעה (ראו newQuote ב-app.js)
 export function calcQuote(q) {
   const pkg = q.pkg || {};
@@ -40,8 +45,17 @@ export function calcQuote(q) {
   const factor = ages ? num(ages.childFactor) : 0.5;
   const billable = billableGuests(q.guests?.adults, q.guests?.children, factor);
 
+  // אופן תמחור המסלול: auto – לפי המחירון, perGuest – מחיר ידני למשתתף, total – סכום ידני למסלול
+  const pricingMode = pricingModeOf(q);
+  const perGuestPrice = num(q.pricing?.perGuest);
+  const packageFor = (guests) =>
+    pricingMode === 'perGuest'
+      ? money(perGuestPrice * guests)
+      : pricingMode === 'total'
+        ? money(q.overrides?.packagePrice)
+        : packagePriceFor(pkg, guests);
   const computedPackage = packagePriceFor(pkg, billable);
-  const packagePrice = isSet(q.overrides?.packagePrice) ? money(q.overrides.packagePrice) : computedPackage;
+  const packagePrice = packageFor(billable);
 
   const computedExtension = extensionPrice(q.extensionMinutes, q.extension || {});
   const extPrice = isSet(q.overrides?.extensionPrice) ? money(q.overrides.extensionPrice) : computedExtension;
@@ -77,7 +91,7 @@ export function calcQuote(q) {
   let max = null;
   const maxGuests = num(q.guests?.max);
   if (maxGuests > billable) {
-    const maxPackage = isSet(q.overrides?.packagePrice) ? packagePrice : packagePriceFor(pkg, maxGuests);
+    const maxPackage = packageFor(maxGuests);
     const maxSubtotal = maxPackage + extrasTotal;
     const maxTotal = maxSubtotal - discountOf(maxSubtotal);
     max = { guests: maxGuests, packagePrice: maxPackage, total: maxTotal, perGuest: money(maxTotal / maxGuests) };
@@ -89,6 +103,9 @@ export function calcQuote(q) {
 
   return {
     billable,
+    pricingMode,
+    perGuestPrice,
+    pizzaCount: isSet(q.pizzaCount) ? num(q.pizzaCount) : 6,
     computedPackage,
     packagePrice,
     computedExtension,
@@ -134,5 +151,6 @@ export function fillTerms(text, calc) {
     .replaceAll('{מקדמה}', formatILS(calc.deposit))
     .replaceAll('{יתרה}', formatILS(calc.balance))
     .replaceAll('{סכום}', formatILS(calc.total))
-    .replaceAll('{דמי_ביטול_חלקיים}', formatILS(calc.partialCancelFee));
+    .replaceAll('{דמי_ביטול_חלקיים}', formatILS(calc.partialCancelFee))
+    .replaceAll('{מספר_פיצות}', String(calc.pizzaCount ?? 6));
 }

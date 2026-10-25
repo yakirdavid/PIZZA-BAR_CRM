@@ -37,7 +37,27 @@ export function eventTypeLabel(q) {
 
 function eventHeading(q) {
   const t = eventTypeLabel(q);
-  return t.startsWith('אירוע') ? `הצעת מחיר ל${t}` : `הצעת מחיר ל${t === 'מסיבה' ? 'מסיבה' : 'אירוע ' + t}`;
+  return /^(אירוע|מסיב)/.test(t) ? `הצעת מחיר ל${t}` : `הצעת מחיר לאירוע ${t}`;
+}
+
+export const HEB_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+// תאריך מדויק, או רק חודש ושנה כשהתאריך עוד לא ידוע
+export function isMonthOnly(q) {
+  return q.event?.dateMode === 'month' && q.event?.year && q.event?.monthNum;
+}
+export function eventDateKey(q) {
+  if (isMonthOnly(q)) return `${q.event.year}-${String(q.event.monthNum).padStart(2, '0')}-15`;
+  return q.event?.date || '';
+}
+export function eventDateShort(q) {
+  if (isMonthOnly(q)) return `${HEB_MONTHS[q.event.monthNum - 1]} ${q.event.year}`;
+  return formatDate(q.event?.date);
+}
+function eventDateLong(q) {
+  if (isMonthOnly(q)) return `${eventDateShort(q)} (התאריך המדויק ייקבע בהמשך)`;
+  const d = q.event?.date;
+  return d ? `${formatDate(d)} (${dayName(d)})` : '';
 }
 
 // מחזיר רשימת בלוקים לפי סדר – כל בלוק נשאר שלם בעמוד אחד
@@ -88,7 +108,7 @@ export function buildBlocks(q, images) {
     ['טלפון', cust.phone],
     ['אימייל', cust.email],
     ['סוג האירוע', eventTypeLabel(q)],
-    ['תאריך האירוע', ev.date ? `${formatDate(ev.date)} (${dayName(ev.date)})` : ''],
+    [isMonthOnly(q) ? 'מועד האירוע' : 'תאריך האירוע', eventDateLong(q)],
     ['כתובת', ev.address],
     [
       'זמני הגשה',
@@ -124,7 +144,7 @@ export function buildBlocks(q, images) {
         ${
           pizzas.length
             ? `<p><b>הפיצות שנבחרו:</b></p><ul class="q-pizzas">${pizzas.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>`
-            : `<p><b>${esc(s.menuNote)}</b></p>`
+            : `<p><b>${esc(fillTerms(s.menuNote, c))}</b></p>`
         }
         <p>החיוב מבוסס על ${esc(formatGuests(c.billable))} משתתפים לחיוב${
           c.max ? `, עם אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))}` : ''
@@ -141,7 +161,14 @@ export function buildBlocks(q, images) {
   const line = (label, value, cls = '') =>
     `<div class="q-line ${cls}"><span>${label}</span><b>${value}</b></div>`;
   const lines = [];
-  lines.push(line(`מסלול ${esc(pkg.name)} – ${esc(formatGuests(c.billable))} משתתפים לחיוב`, formatILS(c.packagePrice)));
+  lines.push(
+    line(
+      c.pricingMode === 'perGuest'
+        ? `מסלול ${esc(pkg.name)} – ${esc(formatGuests(c.billable))} משתתפים × ${formatILS(c.perGuestPrice)}`
+        : `מסלול ${esc(pkg.name)} – ${esc(formatGuests(c.billable))} משתתפים לחיוב`,
+      formatILS(c.packagePrice)
+    )
+  );
   if (q.extensionMinutes > 0 || c.extPrice)
     lines.push(line(`הארכת זמן הגשה – ${esc(formatDuration(q.extensionMinutes))}`, formatILS(c.extPrice)));
   if (c.pastaPrice)
@@ -165,14 +192,24 @@ export function buildBlocks(q, images) {
         <span>${esc(formatGuests(c.billable))} משתתפים לחיוב${c.max ? ` | אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))}` : ''}</span>
       </div>
       <div class="q-price-body">
-        <div class="q-price-hero">
-          <div>
-            <div class="q-price-hero-label">סה״כ להצעה</div>
-            <div class="q-muted">${c.billable ? `ממוצע ${formatILS(c.perGuest)} למשתתף לחיוב` : ''}</div>
-          </div>
-          <div class="q-price-big">${formatILS(c.total)}</div>
-        </div>
-        <div class="q-lines">${lines.join('')}</div>
+        ${
+          c.pricingMode === 'perGuest'
+            ? `<div class="q-price-hero">
+                <div>
+                  <div class="q-price-hero-label">מחיר למשתתף, למסלול ${esc(pkg.name)}</div>
+                  <div class="q-muted">${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
+                </div>
+                <div class="q-price-big">${formatILS(c.perGuestPrice)}</div>
+              </div>`
+            : `<div class="q-price-hero">
+                <div>
+                  <div class="q-price-hero-label">סה״כ להצעה</div>
+                  <div class="q-muted">${c.billable ? `ממוצע ${formatILS(c.perGuest)} למשתתף לחיוב` : ''}</div>
+                </div>
+                <div class="q-price-big">${formatILS(c.total)}</div>
+              </div>`
+        }
+        ${q.display?.showBreakdown === false ? '' : `<div class="q-lines">${lines.join('')}</div>`}
         ${line('סה״כ', formatILS(c.total), 'total')}
         ${
           c.max

@@ -1,7 +1,7 @@
 import { createStore, isCloud } from './store.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
-import { calcQuote, formatILS, formatGuests, formatDuration } from './pricing.js';
-import { esc, formatDate, eventTypeLabel, renderPages, pagesToPdf } from './quote-render.js';
+import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
+import { esc, eventTypeLabel, renderPages, pagesToPdf, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 
 // ---------- עזרים ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -16,6 +16,8 @@ const setPath = (o, p, v) => {
 const today = () => new Date().toISOString().slice(0, 10);
 const statusLabel = (id) => STATUSES.find((s) => s.id === id)?.label || id;
 const normPhone = (p) => String(p || '').replace(/\D/g, '');
+// נייד ישראלי: 10 ספרות שמתחילות ב-05, עם או בלי מקף אחרי 3 הספרות הראשונות
+const validPhone = (p) => /^05\d-?\d{7}$/.test(String(p || '').trim());
 
 function toast(msg, type = 'ok') {
   const el = document.createElement('div');
@@ -38,6 +40,11 @@ function field(label, path, obj, o = {}) {
     o.rerender ? 'data-rerender="1"' : ''
   } ${o.required ? 'required' : ''} ${o.placeholder ? `placeholder="${esc(o.placeholder)}"` : ''}`;
   let input;
+  if (o.type === 'checkbox') {
+    return `<label class="field check ${o.cls || ''}" for="${id}"><input type="checkbox" id="${id}" data-bind="${path}" ${
+      o.rerender ? 'data-rerender="1"' : ''
+    } ${v ? 'checked' : ''}><span>${esc(label)}</span></label>`;
+  }
   if (o.options) {
     input = `<select ${attrs}>${o.options
       .map((op) => {
@@ -163,6 +170,8 @@ function brandSnapshot(s) {
 
 function newQuote(customerKey) {
   const s = state.settings;
+  const d = s.quoteDefaults;
+  const pkg = s.packages.find((p) => p.id === d.packageId) || s.packages[0] || {};
   const q = {
     id: null,
     number: null,
@@ -171,10 +180,22 @@ function newQuote(customerKey) {
     updatedAt: null,
     quoteDate: today(),
     customer: { name: '', phone: '', email: '' },
-    event: { type: s.eventTypes[0] || 'אחר', typeOther: '', date: '', address: '', startTime: '' },
+    event: {
+      type: s.eventTypes.includes(d.eventType) ? d.eventType : s.eventTypes[0] || 'אחר',
+      typeOther: '',
+      dateMode: 'exact',
+      date: '',
+      monthNum: '',
+      year: '',
+      address: '',
+      startTime: d.startTime || '',
+    },
     guests: { adults: '', children: '', infants: '', max: '' },
-    packageId: s.packages[0]?.id,
-    pkg: clone(s.packages[0] || {}),
+    packageId: pkg.id,
+    pkg: clone(pkg),
+    pricing: { mode: 'auto', perGuest: '' },
+    display: { showBreakdown: d.showBreakdown !== false },
+    pizzaCount: d.pizzaCount,
     extensionMinutes: 0,
     extension: clone(s.extension),
     pasta: { name: s.pasta.name, portions: 0, pricePerPortion: s.pasta.pricePerPortion, setupFee: s.pasta.setupFee },
@@ -218,7 +239,7 @@ function quoteMatches(q, f) {
 function sortQuotes(list, sort) {
   const by = {
     created: (a, b) => (b.number || 0) - (a.number || 0),
-    event: (a, b) => (a.event?.date || '9999').localeCompare(b.event?.date || '9999'),
+    event: (a, b) => (eventDateKey(a) || '9999').localeCompare(eventDateKey(b) || '9999'),
     total: (a, b) => calcQuote(b).total - calcQuote(a).total,
   }[sort];
   return [...list].sort(by);
@@ -229,7 +250,7 @@ function renderList() {
   const s = state.settings;
   const counts = Object.fromEntries(STATUSES.map((st) => [st.id, 0]));
   state.quotes.forEach((q) => (counts[q.status] = (counts[q.status] || 0) + 1));
-  const upcomingApproved = state.quotes.filter((q) => q.status === 'approved' && (q.event?.date || '') >= today());
+  const upcomingApproved = state.quotes.filter((q) => q.status === 'approved' && eventDateKey(q) >= today().slice(0, 8));
 
   $('#main').innerHTML = `
     <div class="page-head">
@@ -267,7 +288,7 @@ function renderList() {
                 <td data-l="לקוח"><a href="#/view/${q.id}"><b>${esc(q.customer?.name)}</b></a></td>
                 <td data-l="טלפון"><a href="tel:${esc(normPhone(q.customer?.phone))}" dir="ltr">${esc(q.customer?.phone)}</a></td>
                 <td data-l="אירוע">${esc(eventTypeLabel(q))}</td>
-                <td data-l="תאריך">${esc(formatDate(q.event?.date)) || '—'}</td>
+                <td data-l="תאריך">${esc(eventDateShort(q)) || '—'}</td>
                 <td data-l="סכום" class="money">${formatILS(c.total)}</td>
                 <td data-l="סטטוס"><select class="status-select badge ${q.status}" data-act="status">${STATUSES.map((st) => `<option value="${st.id}" ${st.id === q.status ? 'selected' : ''}>${st.label}</option>`).join('')}</select></td>
                 <td class="actions">
@@ -387,6 +408,36 @@ function renderEditor(q) {
   }
   const s = state.settings;
   let step = 0;
+  // השלמת שדות להצעות שנשמרו בגרסה קודמת
+  q.pricing ??= { mode: pricingModeOf(q), perGuest: '' };
+  q.display ??= { showBreakdown: true };
+  q.event.dateMode ??= 'exact';
+  q.pizzaCount ??= 6;
+
+  const validate = s.quoteDefaults.validatePhone !== false;
+  // ההצעה שומרת עותק של המחירון; מציינים אם המחירון בהגדרות השתנה מאז
+  const pricesStale = () => {
+    const p = s.packages.find((x) => x.id === q.packageId);
+    if (!q.id || !p) return false;
+    const diff = (a, b, keys) => keys.some((k) => String(a?.[k] ?? '') !== String(b?.[k] ?? ''));
+    return (
+      diff(q.pkg, p, ['hours', 'minGuests', 'minPrice', 'extraAdult']) ||
+      diff(q.extension, s.extension, ['hourPrice', 'halfHourPrice']) ||
+      diff(q.depositRules, s.deposit, ['percent', 'min'])
+    );
+  };
+  const staleBanner = () =>
+    pricesStale()
+      ? `<div class="stale">המחירון או שעות ההגשה בהגדרות השתנו מאז שההצעה נשמרה. ההצעה משתמשת במחירים שלה.
+          <button type="button" class="btn small" data-act="refresh-prices">עדכון למחירון הנוכחי</button></div>`
+      : '';
+  const servingText = () => {
+    const mins = Number(q.pkg.hours || 0) * 60 + Number(q.extensionMinutes || 0);
+    const t = q.event.startTime;
+    return `${formatDuration(mins)}${t ? ` · ${t}–${addMinutes(t, mins)}` : ''}`;
+  };
+  const years = [];
+  for (let y = new Date().getFullYear(); y <= new Date().getFullYear() + 3; y++) years.push([y, y]);
 
   $('#main').innerHTML = `
     <div class="page-head">
@@ -411,14 +462,25 @@ function renderEditor(q) {
       <h2>פרטי הלקוח</h2>
       <div class="grid">
         ${field('שם הלקוח', 'customer.name', q, { required: true })}
-        ${field('טלפון', 'customer.phone', q, { type: 'tel', dir: 'ltr' })}
+        ${field('טלפון נייד', 'customer.phone', q, {
+          type: 'tel',
+          dir: 'ltr',
+          required: validate,
+          placeholder: '050-1234567',
+          hint: validate ? '<span id="phone-hint">10 ספרות שמתחילות ב-05</span>' : '',
+        })}
         ${field('אימייל (רשות)', 'customer.email', q, { type: 'email', dir: 'ltr' })}
       </div>
       <h2>פרטי האירוע</h2>
       <div class="grid">
         ${field('סוג האירוע', 'event.type', q, { options: s.eventTypes, rerender: true })}
         ${q.event.type === 'אחר' ? field('פירוט סוג האירוע', 'event.typeOther', q) : ''}
-        ${field('תאריך האירוע', 'event.date', q, { type: 'date' })}
+        ${field('מועד האירוע', 'event.dateMode', q, { options: [['exact', 'תאריך ידוע'], ['month', 'ידוע רק החודש']], rerender: true })}
+        ${
+          q.event.dateMode === 'month'
+            ? `<div class="pair">${field('חודש', 'event.monthNum', q, { type: 'number', options: HEB_MONTHS.map((m, i) => [i + 1, m]) })}${field('שנה', 'event.year', q, { type: 'number', options: years })}</div>`
+            : field('תאריך האירוע', 'event.date', q, { type: 'date' })
+        }
         ${field('שעת תחילת הגשה', 'event.startTime', q, { type: 'time' })}
         ${field('כתובת האירוע', 'event.address', q, { cls: 'span2' })}
       </div>
@@ -452,16 +514,35 @@ function renderEditor(q) {
         ${field(`פעוטות (גיל 0–${ages.infantToAge})`, 'guests.infants', q, { type: 'number', min: 0, hint: 'ללא חיוב' })}
         ${field('כמות מקסימלית משוערת (רשות)', 'guests.max', q, { type: 'number', min: 0, hint: 'להצגת מחיר במקרה של הגדלה' })}
       </div>
-      <div class="calc-note" id="pkg-calc">משתתפים לחיוב: <b>${formatGuests(c.billable)}</b> · מחיר מסלול מחושב: <b>${formatILS(c.computedPackage)}</b></div>
-      <details class="sub" ${q.overrides.packagePrice !== '' ? 'open' : ''}>
+      <div class="calc-note" id="pkg-calc"></div>
+      <h2>תמחור וזמן הגשה</h2>
+      <div class="grid">
+        ${field('אופן התמחור', 'pricing.mode', q, {
+          rerender: true,
+          options: [
+            ['auto', 'לפי המחירון (מינימום + משתתף נוסף)'],
+            ['perGuest', 'מחיר ידני למשתתף'],
+            ['total', 'סכום ידני למסלול'],
+          ],
+        })}
+        ${
+          q.pricing.mode === 'perGuest'
+            ? field('מחיר למשתתף (₪)', 'pricing.perGuest', q, { type: 'number', min: 0, hint: 'מוכפל במספר המשתתפים לחיוב (ילד = חצי)' })
+            : q.pricing.mode === 'total'
+              ? field('מחיר המסלול (₪)', 'overrides.packagePrice', q, { type: 'number', min: 0, hint: 'סכום קבוע, לא משתנה לפי הכמות' })
+              : `<div class="field"><span>מחיר לפי המחירון</span><div class="readonly">${formatILS(c.computedPackage)}</div></div>`
+        }
+        ${field('שעות הגשה כלולות במסלול', 'pkg.hours', q, { type: 'number', step: 0.5, min: 0 })}
+        <div class="field"><span>זמני הגשה (כולל הארכה)</span><div class="readonly" id="serving">${esc(servingText())}</div></div>
+        ${field('הצגת פירוט המחיר בהצעה ללקוח', 'display.showBreakdown', q, { type: 'checkbox', cls: 'span2' })}
+      </div>
+      <details class="sub">
         <summary>עריכת מחירי המסלול להצעה זו בלבד</summary>
         <div class="grid four">
           ${field('מחיר מינימום', 'pkg.minPrice', q, { type: 'number' })}
           ${field('משתתפים כלולים במינימום', 'pkg.minGuests', q, { type: 'number' })}
           ${field('מחיר מבוגר נוסף', 'pkg.extraAdult', q, { type: 'number', hint: `ילד נוסף: ${formatILS(q.pkg.extraAdult * ages.childFactor)}` })}
-          ${field('שעות הגשה כלולות', 'pkg.hours', q, { type: 'number', step: 0.5 })}
-          ${field('כלול במסלול', 'pkg.includes', q, { cls: 'span2' })}
-          ${field('מחיר מסלול סופי (דריסה ידנית)', 'overrides.packagePrice', q, { type: 'number', placeholder: 'ריק = לפי החישוב', cls: 'span2' })}
+          ${field('כלול במסלול', 'pkg.includes', q, { cls: 'span3' })}
           ${field('תיאור השירות', 'pkg.description', q, { type: 'textarea', cls: 'span4' })}
         </div>
         <button type="button" class="btn small ghost" data-act="refresh-prices">עדכון למחירון הנוכחי מההגדרות</button>
@@ -474,7 +555,7 @@ function renderEditor(q) {
       return `
       <h2>הארכת זמן הגשה</h2>
       <div class="grid">
-        ${field('הארכה מעבר לזמן הכלול', 'extensionMinutes', q, { options: extOpts, type: 'number' })}
+        ${field('הארכה מעבר לזמן הכלול', 'extensionMinutes', q, { options: extOpts, type: 'number', hint: `כלול במסלול: ${esc(formatDuration(q.pkg.hours * 60))}` })}
         ${field('מחיר הארכה (דריסה ידנית)', 'overrides.extensionPrice', q, { type: 'number', placeholder: 'ריק = לפי החישוב', hint: `${formatILS(q.extension.hourPrice)} לשעה · ${formatILS(q.extension.halfHourPrice)} לחצי שעה` })}
       </div>
       <h2>פסטות</h2>
@@ -535,11 +616,12 @@ function renderEditor(q) {
         ${field('דמי ביטול חלקיים (% מהמקדמה)', 'cancellation.partialFeePercent', q, { type: 'number' })}
       </div>
       <h2>תנאי התקשרות</h2>
-      <label class="field"><span>שורה לכל סעיף. משתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים}</span>
+      <label class="field"><span>שורה לכל סעיף. משתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים} {מספר_פיצות}</span>
         <textarea data-bind-lines="terms" rows="8">${esc(q.terms.join('\n'))}</textarea></label>
       <button type="button" class="btn small ghost" data-act="reset-terms">שחזור תנאי ברירת המחדל</button>
-      <h2>בחירת פיצות (רשות – עד 6)</h2>
-      <p class="hint">אם לא נבחרו, יודפס: "${esc(q.brand.menuNote)}"</p>
+      <h2>בחירת פיצות</h2>
+      <div class="grid">${field('מספר סוגי הפיצות לבחירה', 'pizzaCount', q, { type: 'number', min: 1, rerender: true })}</div>
+      <p class="hint">אפשר לבחור עכשיו עד ${esc(q.pizzaCount)} סוגים, או להשאיר לבחירה בהמשך. אם לא נבחרו, יודפס: "${esc(fillTerms(q.brand.menuNote, c))}"</p>
       <div class="chips">
         ${[...menuPizzas, ...extraPicked]
           .map((p) => `<label class="chip"><input type="checkbox" data-pizza value="${esc(p)}" ${q.pizzas.includes(p) ? 'checked' : ''}> ${esc(p)}</label>`)
@@ -565,7 +647,8 @@ function renderEditor(q) {
     $('#summary').innerHTML = `
       <h3>סיכום מחיר</h3>
       ${row('משתתפים לחיוב', formatGuests(c.billable))}
-      ${row(`מסלול ${esc(q.pkg.name || '')}`, formatILS(c.packagePrice))}
+      ${row(`מסלול ${esc(q.pkg.name || '')}${c.pricingMode === 'perGuest' ? ` (${formatILS(c.perGuestPrice)} למשתתף)` : c.pricingMode === 'total' ? ' (ידני)' : ''}`, formatILS(c.packagePrice))}
+      ${row('זמן הגשה', esc(servingText()), 'muted')}
       ${c.extPrice ? row('הארכה', formatILS(c.extPrice)) : ''}
       ${c.pastaPrice ? row('פסטות', formatILS(c.pastaPrice)) : ''}
       ${c.addonsTotal ? row('תוספות', formatILS(c.addonsTotal)) : ''}
@@ -583,11 +666,28 @@ function renderEditor(q) {
       </div>`;
     $('#mobile-total').innerHTML = `<span>סה״כ <b>${formatILS(c.total)}</b></span><span>מקדמה ${formatILS(c.deposit)}</span>`;
     const calcEl = $('#pkg-calc');
-    if (calcEl) calcEl.innerHTML = `משתתפים לחיוב: <b>${formatGuests(c.billable)}</b> · מחיר מסלול מחושב: <b>${formatILS(c.computedPackage)}</b>`;
+    if (calcEl)
+      calcEl.innerHTML = `משתתפים לחיוב: <b>${formatGuests(c.billable)}</b> · מחיר המסלול: <b>${formatILS(c.packagePrice)}</b>${
+        c.pricingMode === 'auto' ? '' : ` <small>(לפי המחירון: ${formatILS(c.computedPackage)})</small>`
+      }`;
+    const servEl = $('#serving');
+    if (servEl) servEl.textContent = servingText();
+    const ph = $('#f_customer_phone');
+    if (ph && validate) {
+      const bad = ph.value.trim() !== '' && !validPhone(ph.value);
+      ph.classList.toggle('invalid', bad);
+      $('#phone-hint')?.classList.toggle('err', bad);
+    }
   };
 
   const drawStep = () => {
+    if (q.event.dateMode === 'month' && !q.event.monthNum) {
+      const n = new Date();
+      q.event.monthNum = n.getMonth() + 1;
+      q.event.year = n.getFullYear();
+    }
     form.innerHTML =
+      staleBanner() +
       sections[step]() +
       `<div class="step-nav">
         ${step > 0 ? '<button type="button" class="btn ghost" data-act="prev">→ הקודם</button>' : '<span></span>'}
@@ -610,6 +710,7 @@ function renderEditor(q) {
       q.packageId = p.id;
       q.pkg = clone(p);
       q.overrides.packagePrice = '';
+      if (q.pricing.mode === 'total') q.pricing.mode = 'auto';
       state.dirty = true;
       drawStep();
     }
@@ -621,9 +722,9 @@ function renderEditor(q) {
     }
     if (el.dataset.pizza !== undefined) {
       const picked = $$('[data-pizza]:checked', form).map((x) => x.value);
-      if (picked.length > 6) {
+      if (picked.length > Number(q.pizzaCount || 0)) {
         el.checked = false;
-        toast('ניתן לבחור עד 6 סוגי פיצות', 'error');
+        toast(`ניתן לבחור עד ${q.pizzaCount} סוגי פיצות`, 'error');
         return;
       }
       q.pizzas = picked;
@@ -674,6 +775,13 @@ function renderEditor(q) {
       drawStep();
       toast('יש להזין שם לקוח', 'error');
       $('#f_customer_name')?.focus();
+      return;
+    }
+    if (validate && !validPhone(q.customer.phone)) {
+      step = 0;
+      drawStep();
+      toast('מספר טלפון לא תקין – 10 ספרות שמתחילות ב-05 (למשל 050-1234567)', 'error');
+      $('#f_customer_phone')?.focus();
       return;
     }
     busy(true, 'שומר...');
@@ -794,7 +902,10 @@ function renderCustomers() {
       e.phone = q.customer?.phone;
       e.email = q.customer?.email || e.email;
     }
-    if ((q.event?.date || '') > e.last) e.last = q.event.date;
+    if (eventDateKey(q) > (e.lastKey || '')) {
+      e.lastKey = eventDateKey(q);
+      e.last = eventDateShort(q);
+    }
     map.set(key, e);
   }
   const list = [...map.values()].sort((a, b) => (b.lastCreated || '').localeCompare(a.lastCreated || ''));
@@ -818,7 +929,7 @@ function renderCustomers() {
               <td data-l="טלפון"><a href="tel:${esc(normPhone(e.phone))}" dir="ltr">${esc(e.phone)}</a></td>
               <td data-l="אימייל" dir="ltr">${esc(e.email)}</td>
               <td data-l="הצעות">${e.quotes.map((q) => `<a class="badge ${q.status}" href="#/view/${q.id}">${esc(q.number)}</a>`).join(' ')}</td>
-              <td data-l="אירוע אחרון">${esc(formatDate(e.last)) || '—'}</td>
+              <td data-l="אירוע אחרון">${esc(e.last) || '—'}</td>
               <td data-l="מאושר" class="money">${approved ? formatILS(approved) : '—'}</td>
               <td class="actions"><a class="btn small ghost" href="#/new/${encodeURIComponent(e.key)}">+ הצעה</a>${
                 e.phone ? `<a class="icon" target="_blank" rel="noopener" href="https://wa.me/${waPhone(e.phone)}" title="וואטסאפ">💬</a>` : ''
@@ -976,9 +1087,9 @@ async function renderSettings() {
       ),
       sec(
         'תנאי תשלום וביטול (ברירת מחדל להצעות חדשות)',
-        `<label class="field"><span>שורה לכל סעיף. משתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים}</span>
+        `<label class="field"><span>שורה לכל סעיף. משתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים} {מספר_פיצות}</span>
           <textarea data-bind-lines="terms" rows="8">${esc(s.terms.join('\n'))}</textarea></label>
-          ${field('הערת בחירת תפריט', 'menuNote', s, { cls: 'span2' })}`
+          ${field('הערת בחירת תפריט', 'menuNote', s, { cls: 'span2', hint: 'מודפסת כשלא נבחרו פיצות. {מספר_פיצות} מוחלף במספר שנקבע בהצעה' })}`
       ),
       sec(
         'תפריט',
@@ -995,6 +1106,17 @@ async function renderSettings() {
           ${field('עלות פנימית למשתתף', 'internal.costPerGuest', s, { type: 'number' })}
           ${field('עלות קבועה לאירוע', 'internal.fixedCost', s, { type: 'number' })}
           ${field('עמלה (%)', 'internal.commissionPercent', s, { type: 'number' })}
+        </div>`
+      ),
+      sec(
+        'ברירות מחדל להצעה חדשה',
+        `<div class="grid">
+          ${field('סוג אירוע ברירת מחדל', 'quoteDefaults.eventType', s, { options: s.eventTypes })}
+          ${field('מסלול ברירת מחדל', 'quoteDefaults.packageId', s, { options: s.packages.map((p) => [p.id, p.name]) })}
+          ${field('מספר סוגי פיצות לבחירה', 'quoteDefaults.pizzaCount', s, { type: 'number', min: 1 })}
+          ${field('שעת תחילת הגשה (רשות)', 'quoteDefaults.startTime', s, { type: 'time' })}
+          ${field('הצגת פירוט המחיר בהצעה ללקוח', 'quoteDefaults.showBreakdown', s, { type: 'checkbox' })}
+          ${field('בדיקת טלפון נייד (10 ספרות, מתחיל ב-05)', 'quoteDefaults.validatePhone', s, { type: 'checkbox' })}
         </div>`
       ),
       sec(

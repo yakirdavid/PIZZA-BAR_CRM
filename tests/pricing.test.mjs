@@ -84,3 +84,20 @@ test('terms placeholders', () => {
   const c = calcQuote(base({ guests: { adults: 15 } }));
   assert.match(fillTerms('מקדמה {מקדמה} דמי {דמי_ביטול_חלקיים}', c), /675.*338/);
 });
+
+test('manual price per participant scales with guests and max scenario', () => {
+  const c = calcQuote(base({ guests: { adults: 100, children: 10, max: 130 }, pricing: { mode: 'perGuest', perGuest: 180 } }));
+  assert.equal(c.packagePrice, 105 * 180);
+  assert.equal(c.total, 18900);
+  assert.equal(c.max.total, 130 * 180);
+});
+
+test('pricing mode auto ignores a stale manual total', () => {
+  const c = calcQuote(base({ guests: { adults: 15 }, pricing: { mode: 'auto' }, overrides: { packagePrice: 999 } }));
+  assert.equal(c.total, 2700);
+});
+
+test('pizza count placeholder', () => {
+  const c = calcQuote(base({ guests: { adults: 15 }, pizzaCount: 5 }));
+  assert.equal(fillTerms('בחירת {מספר_פיצות} סוגי פיצות', c), 'בחירת 5 סוגי פיצות');
+});
