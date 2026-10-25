@@ -1,0 +1,9 @@
+rules_version = '2';
+// כל משתמש מחובר ניגש רק לנתונים שלו (users/<uid>/...). אין גישה ללא כניסה.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

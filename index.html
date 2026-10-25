@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#23392f">
+  <title>PIZZA-BAR | הצעות מחיר</title>
+  <link rel="icon" href="assets/logo.png">
+  <link rel="apple-touch-icon" href="assets/logo.png">
+  <link rel="stylesheet" href="css/quote.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="vendor/jspdf.umd.min.js" defer></script>
+  <script src="vendor/html-to-image.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topnav">
+    <a class="brand" href="#/"><img src="assets/logo.png" alt=""><span>PIZZA-BAR<small>הצעות מחיר</small></span></a>
+    <nav class="nav">
+      <a href="#/" data-page="list">הצעות</a>
+      <a href="#/customers" data-page="customers">לקוחות</a>
+      <a href="#/settings" data-page="settings">הגדרות</a>
+    </nav>
+    <button class="btn ghost small" id="logout" hidden>יציאה</button>
+  </header>
+  <div id="mode-banner" class="mode-banner" hidden>
+    מצב מקומי: הנתונים נשמרים בדפדפן זה בלבד. לשמירה בענן, גישה מכל מכשיר וכניסה מאובטחת – חברו את Firebase (ראו README).
+  </div>
+  <main id="main"></main>
+  <div id="toasts"></div>
+  <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busy-text"></span></div>
+  <!-- אזור לא נראה שבו נבנים עמודי ההצעה להדפסה ול-PDF -->
+  <div id="doc-stage" aria-hidden="true"></div>
+</body>
+</html>
