@@ -373,19 +373,29 @@ async function deleteQuote(q) {
 // ---------- PDF ----------
 const pdfName = (q) => `הצעת מחיר ${q.number} - ${(q.customer?.name || '').replace(/[\\/:*?"<>|]/g, '')}.pdf`;
 
-async function prepareStage(q) {
-  const imgs = await resolveImages(q.brand?.images);
-  return renderPages($('#doc-stage'), q, imgs);
+// טקסטים, כרטיסי שירות, לוגו ותמונות תמיד לפי ההגדרות הנוכחיות.
+// קבוצות הגיל נשארות מההצעה עצמה כי הן משפיעות על המחיר.
+function withLiveBrand(q) {
+  const live = brandSnapshot(state.settings);
+  return { ...q, brand: { ...live, ageGroups: q.brand?.ageGroups || live.ageGroups } };
+}
+
+// frozen – עותק PDF שהופק בעבר: מציגים אותו בדיוק כפי שהיה
+async function prepareStage(q, { frozen = false } = {}) {
+  const doc = frozen ? q : withLiveBrand(q);
+  const imgs = await resolveImages(doc.brand?.images);
+  return renderPages($('#doc-stage'), doc, imgs);
 }
 
 // מפיק PDF ושומר עותק (צילום מצב של ההצעה ברגע ההפקה)
-async function downloadPdf(q, { saveCopy = true } = {}) {
+async function downloadPdf(q, { saveCopy = true, frozen = false } = {}) {
   busy(true, 'מפיק PDF...');
   try {
-    await prepareStage(q);
-    await pagesToPdf($('#doc-stage'), pdfName(q));
+    const doc = frozen ? q : withLiveBrand(q);
+    await prepareStage(doc, { frozen: true });
+    await pagesToPdf($('#doc-stage'), pdfName(doc));
     if (saveCopy && q.id) {
-      const { generated, ...snap } = q;
+      const { generated, ...snap } = doc;
       q.generated = [{ at: new Date().toISOString(), total: calcQuote(q).total, snapshot: clone(snap) }, ...(generated || [])].slice(0, 15);
       await persist(q);
     }
@@ -622,7 +632,7 @@ function renderEditor(q) {
       <button type="button" class="btn small ghost" data-act="reset-terms">שחזור תנאי ברירת המחדל</button>
       <h2>בחירת פיצות</h2>
       <div class="grid">${field('מספר סוגי הפיצות לבחירה', 'pizzaCount', q, { type: 'number', min: 1, rerender: true })}</div>
-      <p class="hint">אפשר לבחור עכשיו עד ${esc(q.pizzaCount)} סוגים, או להשאיר לבחירה בהמשך. אם לא נבחרו, יודפס: "${esc(fillTerms(q.brand.menuNote, c))}"</p>
+      <p class="hint">אפשר לבחור עכשיו עד ${esc(q.pizzaCount)} סוגים, או להשאיר לבחירה בהמשך. אם לא נבחרו, יודפס: "${esc(fillTerms(s.menuNote, c))}"</p>
       <div class="chips">
         ${[...menuPizzas, ...extraPicked]
           .map((p) => `<label class="chip"><input type="checkbox" data-pizza value="${esc(p)}" ${q.pizzas.includes(p) ? 'checked' : ''}> ${esc(p)}</label>`)
@@ -788,6 +798,7 @@ function renderEditor(q) {
     busy(true, 'שומר...');
     try {
       if (!q.number) q.number = await state.store.nextNumber(Number(s.numbering.start) || 1);
+      q.brand = withLiveBrand(q).brand;
       await persist(q);
       state.dirty = false;
       toast(`הצעה ${q.number} נשמרה`);
@@ -877,7 +888,7 @@ async function renderView(q) {
   $$('[data-copy]').forEach((b) =>
     b.addEventListener('click', async () => {
       const g = q.generated[+b.dataset.copy];
-      await downloadPdf({ ...g.snapshot, generated: [] }, { saveCopy: false });
+      await downloadPdf({ ...g.snapshot, generated: [] }, { saveCopy: false, frozen: true });
       prepareStage(q);
     })
   );
