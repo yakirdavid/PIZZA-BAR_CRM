@@ -60,6 +60,27 @@ function eventDateLong(q) {
   return d ? `${formatDate(d)} (${dayName(d)})` : '';
 }
 
+// ניסוח ללקוח: "28 מבוגרים + 2 ילדים (חצי מחיר)" – במקום מספר "משתתפים לחיוב" שמשקלל ילדים כחצי
+function childPriceText(factor) {
+  if (factor === 0.5) return 'חצי מחיר';
+  if (factor === 0) return 'ללא חיוב';
+  return `${Math.round(factor * 100)}% ממחיר מבוגר`;
+}
+function countText(n, word) {
+  const forms = { מבוגר: ['מבוגר אחד', 'מבוגרים'], ילד: ['ילד אחד', 'ילדים'], פעוט: ['פעוט אחד', 'פעוטות'] }[word];
+  return n === 1 ? forms[0] : `${n} ${forms[1]}`;
+}
+export function guestsText(q) {
+  const g = q.guests || {};
+  const factor = Number(q.brand?.ageGroups?.childFactor ?? 0.5);
+  const adults = Number(g.adults) || 0;
+  const kids = Number(g.children) || 0;
+  const parts = [];
+  if (adults) parts.push(countText(adults, 'מבוגר'));
+  if (kids) parts.push(`${countText(kids, 'ילד')} (${childPriceText(factor)})`);
+  return parts.join(' + ');
+}
+
 // מחזיר רשימת בלוקים לפי סדר – כל בלוק נשאר שלם בעמוד אחד
 export function buildBlocks(q, images) {
   const s = q.brand; // עותק ההגדרות שנשמר עם ההצעה
@@ -67,6 +88,10 @@ export function buildBlocks(q, images) {
   const pkg = q.pkg || {};
   const g = q.guests || {};
   const totalMinutes = Number(pkg.hours || 0) * 60 + Number(q.extensionMinutes || 0);
+  const adults = Number(g.adults) || 0;
+  const kids = Number(g.children) || 0;
+  const childFactor = Number(s.ageGroups?.childFactor ?? 0.5);
+  const guests = guestsText(q);
   const blocks = [];
   const add = (html, opts = {}) => blocks.push({ html, ...opts });
 
@@ -146,10 +171,16 @@ export function buildBlocks(q, images) {
             ? `<p><b>הפיצות שנבחרו:</b></p><ul class="q-pizzas">${pizzas.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>`
             : `<p><b>${esc(fillTerms(s.menuNote, c))}</b></p>`
         }
-        <p>החיוב מבוסס על ${esc(formatGuests(c.billable))} משתתפים לחיוב${
-          c.max ? `, עם אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))}` : ''
-        }.</p>
-        ${pkg.minGuests ? `<p class="q-muted">מחיר המסלול כולל עד ${esc(pkg.minGuests)} משתתפים לחיוב.</p>` : ''}
+        ${
+          guests
+            ? `<p>המחיר מחושב ל-${esc(guests)}${c.max ? `, עם אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))} משתתפים` : ''}.</p>`
+            : ''
+        }
+        ${
+          pkg.minGuests && c.pricingMode === 'auto'
+            ? `<p class="q-muted">מחיר המינימום של המסלול כולל עד ${esc(pkg.minGuests)} מבוגרים${kids ? ' (כל ילד נספר כחצי מבוגר)' : ''}.</p>`
+            : ''
+        }
       </div>
       ${
         photos.length
@@ -161,14 +192,26 @@ export function buildBlocks(q, images) {
   const line = (label, value, cls = '') =>
     `<div class="q-line ${cls}"><span>${label}</span><b>${value}</b></div>`;
   const lines = [];
-  lines.push(
-    line(
-      c.pricingMode === 'perGuest'
-        ? `מסלול ${esc(pkg.name)} – ${esc(formatGuests(c.billable))} משתתפים × ${formatILS(c.perGuestPrice)}`
-        : `מסלול ${esc(pkg.name)} – ${esc(formatGuests(c.billable))} משתתפים לחיוב`,
-      formatILS(c.packagePrice)
-    )
-  );
+  if (c.pricingMode === 'perGuest' && kids) {
+    // מחיר ידני למשתתף: שורה למבוגרים ושורה לילדים, כדי שהחישוב יהיה ברור
+    const adultsTotal = Math.round(adults * c.perGuestPrice);
+    lines.push(line(`מסלול ${esc(pkg.name)} – ${esc(countText(adults, 'מבוגר'))} × ${formatILS(c.perGuestPrice)}`, formatILS(adultsTotal)));
+    lines.push(
+      line(
+        `${esc(countText(kids, 'ילד'))} × ${formatILS(c.perGuestPrice * childFactor)} (${esc(childPriceText(childFactor))})`,
+        formatILS(c.packagePrice - adultsTotal)
+      )
+    );
+  } else {
+    lines.push(
+      line(
+        c.pricingMode === 'perGuest'
+          ? `מסלול ${esc(pkg.name)} – ${esc(guests)} × ${formatILS(c.perGuestPrice)}`
+          : `מסלול ${esc(pkg.name)}${guests ? ` – ${esc(guests)}` : ''}`,
+        formatILS(c.packagePrice)
+      )
+    );
+  }
   if (q.extensionMinutes > 0 || c.extPrice)
     lines.push(line(`הארכת זמן הגשה – ${esc(formatDuration(q.extensionMinutes))}`, formatILS(c.extPrice)));
   if (c.pastaPrice)
@@ -189,22 +232,28 @@ export function buildBlocks(q, images) {
     <section class="q-price">
       <div class="q-price-head">
         <h2>הצעת המחיר</h2>
-        <span>${esc(formatGuests(c.billable))} משתתפים לחיוב${c.max ? ` | אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))}` : ''}</span>
+        <span>${esc(guests)}${c.max ? ` | אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))} משתתפים` : ''}</span>
       </div>
       <div class="q-price-body">
         ${
           c.pricingMode === 'perGuest'
             ? `<div class="q-price-hero">
                 <div>
-                  <div class="q-price-hero-label">מחיר למשתתף, למסלול ${esc(pkg.name)}</div>
-                  <div class="q-muted">${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
+                  <div class="q-price-hero-label">${kids ? 'מחיר למבוגר' : 'מחיר למשתתף'}, למסלול ${esc(pkg.name)}</div>
+                  <div class="q-muted">${
+                    kids ? `ילד: ${formatILS(c.perGuestPrice * childFactor)} (${esc(childPriceText(childFactor))}) · ` : ''
+                  }${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
                 </div>
                 <div class="q-price-big">${formatILS(c.perGuestPrice)}</div>
               </div>`
             : `<div class="q-price-hero">
                 <div>
                   <div class="q-price-hero-label">סה״כ להצעה</div>
-                  <div class="q-muted">${c.billable ? `ממוצע ${formatILS(c.perGuest)} למשתתף לחיוב` : ''}</div>
+                  <div class="q-muted">${
+                    c.billable
+                      ? `ממוצע ${formatILS(c.perGuest)} למבוגר${kids ? ` · ${formatILS(c.perGuest * childFactor)} לילד` : ''}`
+                      : ''
+                  }</div>
                 </div>
                 <div class="q-price-big">${formatILS(c.total)}</div>
               </div>`
