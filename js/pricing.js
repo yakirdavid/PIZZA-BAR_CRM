@@ -106,6 +106,7 @@ export function calcQuote(q) {
     pricingMode,
     perGuestPrice,
     pizzaCount: isSet(q.pizzaCount) ? num(q.pizzaCount) : 6,
+    starterCount: isSet(q.starterCount) ? num(q.starterCount) : num(q.brand?.packageStarters?.[q.packageId]),
     computedPackage,
     packagePrice,
     computedExtension,
@@ -152,5 +153,6 @@ export function fillTerms(text, calc) {
     .replaceAll('{יתרה}', formatILS(calc.balance))
     .replaceAll('{סכום}', formatILS(calc.total))
     .replaceAll('{דמי_ביטול_חלקיים}', formatILS(calc.partialCancelFee))
-    .replaceAll('{מספר_פיצות}', String(calc.pizzaCount ?? 6));
+    .replaceAll('{מספר_פיצות}', String(calc.pizzaCount ?? 6))
+    .replaceAll('{מספר_ראשונות}', String(calc.starterCount ?? 0));
 }

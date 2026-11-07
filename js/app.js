@@ -165,6 +165,8 @@ function brandSnapshot(s) {
     ageGroups: s.ageGroups,
     features: s.features,
     menuNote: s.menuNote,
+    starterNote: s.starterNote,
+    packageStarters: Object.fromEntries(s.packages.map((p) => [p.id, Number(p.starterCount) || 0])),
     images: s.images,
   });
 }
@@ -197,6 +199,7 @@ function newQuote(customerKey) {
     pricing: { mode: 'auto', perGuest: '' },
     display: { showBreakdown: d.showBreakdown !== false },
     pizzaCount: d.pizzaCount,
+    starterCount: Number(pkg.starterCount) || 0,
     extensionMinutes: 0,
     extension: clone(s.extension),
     pasta: { name: s.pasta.name, portions: 0, pricePerPortion: s.pasta.pricePerPortion, setupFee: s.pasta.setupFee },
@@ -574,6 +577,7 @@ function renderEditor(q) {
   q.display ??= { showBreakdown: true };
   q.event.dateMode ??= 'exact';
   q.pizzaCount ??= 6;
+  q.starterCount ??= Number(s.packages.find((p) => p.id === q.packageId)?.starterCount) || 0;
 
   const validate = s.quoteDefaults.validatePhone !== false;
   // ההצעה שומרת עותק של המחירון; מציינים אם המחירון בהגדרות השתנה מאז
@@ -781,7 +785,10 @@ function renderEditor(q) {
         <textarea data-bind-lines="terms" rows="8">${esc(q.terms.join('\n'))}</textarea></label>
       <button type="button" class="btn small ghost" data-act="reset-terms">שחזור תנאי ברירת המחדל</button>
       <h2>בחירת פיצות</h2>
-      <div class="grid">${field('מספר סוגי הפיצות לבחירה', 'pizzaCount', q, { type: 'number', min: 1, rerender: true })}</div>
+      <div class="grid">
+        ${field('מספר סוגי הפיצות לבחירה', 'pizzaCount', q, { type: 'number', min: 1, rerender: true })}
+        ${field('מספר מנות ראשונות לבחירה', 'starterCount', q, { type: 'number', min: 0, hint: '0 = לא מודפס (למשל במסלול פיצות בלבד)' })}
+      </div>
       <p class="hint">אפשר לבחור עכשיו עד ${esc(q.pizzaCount)} סוגים, או להשאיר לבחירה בהמשך. אם לא נבחרו, יודפס: "${esc(fillTerms(s.menuNote, c))}"</p>
       <div class="chips">
         ${[...menuPizzas, ...extraPicked]
@@ -870,6 +877,7 @@ function renderEditor(q) {
       const p = s.packages.find((x) => x.id === el.value);
       q.packageId = p.id;
       q.pkg = clone(p);
+      q.starterCount = Number(p.starterCount) || 0;
       q.overrides.packagePrice = '';
       if (q.pricing.mode === 'total') q.pricing.mode = 'auto';
       state.dirty = true;
@@ -911,6 +919,7 @@ function renderEditor(q) {
       const p = s.packages.find((x) => x.id === q.packageId) || s.packages[0];
       q.pkg = clone(p);
       q.packageId = p.id;
+      q.starterCount = Number(p.starterCount) || 0;
       q.extension = clone(s.extension);
       q.depositRules = clone(s.deposit);
       q.cancellation = clone(s.cancellation);
@@ -1192,7 +1201,8 @@ async function renderSettings() {
                 ${field('משתתפים כלולים במינימום', `packages.${i}.minGuests`, s, { type: 'number' })}
                 ${field('מחיר מינימום', `packages.${i}.minPrice`, s, { type: 'number' })}
                 ${field('מחיר מבוגר נוסף', `packages.${i}.extraAdult`, s, { type: 'number', hint: `ילד נוסף: ${formatILS(p.extraAdult * s.ageGroups.childFactor)} · פעוט: ללא חיוב` })}
-                ${field('כלול במסלול', `packages.${i}.includes`, s, { cls: 'span3' })}
+                ${field('מנות ראשונות לבחירה', `packages.${i}.starterCount`, s, { type: 'number', min: 0 })}
+                ${field('כלול במסלול', `packages.${i}.includes`, s, { cls: 'span2' })}
                 ${field('תיאור השירות', `packages.${i}.description`, s, { type: 'textarea', cls: 'span4' })}
               </div>
               ${s.packages.length > 1 ? `<button type="button" class="btn small ghost danger" data-del-pkg="${i}">הסרת מסלול</button>` : ''}
@@ -1261,7 +1271,8 @@ async function renderSettings() {
         'תנאי תשלום וביטול (ברירת מחדל להצעות חדשות)',
         `<label class="field"><span>שורה לכל סעיף. משתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים} {מספר_פיצות}</span>
           <textarea data-bind-lines="terms" rows="8">${esc(s.terms.join('\n'))}</textarea></label>
-          ${field('הערת בחירת תפריט', 'menuNote', s, { cls: 'span2', hint: 'מודפסת כשלא נבחרו פיצות. {מספר_פיצות} מוחלף במספר שנקבע בהצעה' })}`
+          ${field('הערת בחירת תפריט', 'menuNote', s, { cls: 'span2', hint: 'מודפסת כשלא נבחרו פיצות. {מספר_פיצות} מוחלף במספר שנקבע בהצעה' })}
+          ${field('הערת מנות ראשונות', 'starterNote', s, { cls: 'span2', hint: 'מודפסת כשבמסלול יש מנות ראשונות לבחירה. {מספר_ראשונות} מוחלף במספר' })}`
       ),
       sec(
         'תפריט',

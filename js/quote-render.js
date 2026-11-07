@@ -72,12 +72,13 @@ function countText(n, word) {
 }
 export function guestsText(q) {
   const g = q.guests || {};
-  const factor = Number(q.brand?.ageGroups?.childFactor ?? 0.5);
+  const ages = q.brand?.ageGroups || {};
+  const factor = Number(ages.childFactor ?? 0.5);
   const adults = Number(g.adults) || 0;
   const kids = Number(g.children) || 0;
   const parts = [];
   if (adults) parts.push(countText(adults, 'מבוגר'));
-  if (kids) parts.push(`${countText(kids, 'ילד')} (${childPriceText(factor)})`);
+  if (kids) parts.push(`${countText(kids, 'ילד')}${ages.adultFromAge ? ` עד גיל ${ages.adultFromAge}` : ''} (${childPriceText(factor)})`);
   return parts.join(' + ');
 }
 
@@ -143,13 +144,9 @@ export function buildBlocks(q, images) {
     ],
     [
       'משתתפים',
-      [
-        g.adults ? `${g.adults} מבוגרים (מגיל ${s.ageGroups.adultFromAge})` : '',
-        g.children ? `${g.children} ילדים (${s.ageGroups.childFromAge}–${s.ageGroups.childToAge})` : '',
-        g.infants ? `${g.infants} פעוטות (0–${s.ageGroups.infantToAge})` : '',
-      ]
+      [guests, g.infants ? `${countText(Number(g.infants), 'פעוט')} עד גיל ${Number(s.ageGroups.infantToAge) + 1} (ללא חיוב)` : '']
         .filter(Boolean)
-        .join(' · '),
+        .join(' + '),
     ],
   ].filter(([, v]) => v);
   add(`
@@ -171,6 +168,7 @@ export function buildBlocks(q, images) {
             ? `<p><b>הפיצות שנבחרו:</b></p><ul class="q-pizzas">${pizzas.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>`
             : `<p><b>${esc(fillTerms(s.menuNote, c))}</b></p>`
         }
+        ${c.starterCount > 0 && s.starterNote ? `<p><b>${esc(fillTerms(s.starterNote, c))}</b></p>` : ''}
         ${
           guests
             ? `<p>המחיר מחושב ל-${esc(guests)}${c.max ? `, עם אפשרות להגדלה עד ${esc(formatGuests(c.max.guests))} משתתפים` : ''}.</p>`

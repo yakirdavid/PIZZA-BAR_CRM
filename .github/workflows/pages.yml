@@ -26,6 +26,13 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+      # כל העלאה מקבלת מספר גרסה בכתובות הקבצים, כדי שהדפדפן (גם בטלפון) יטען מיד את הגרסה החדשה
+      - name: Cache-bust scripts and styles
+        run: |
+          V="${GITHUB_SHA::8}"
+          sed -i -E "s#(from '\./[a-z-]+\.js)'#\1?v=$V'#g" js/*.js
+          sed -i -E "s#(src|href)=\"((js|css|vendor)/[A-Za-z0-9._-]+\.(js|css))\"#\1=\"\2?v=$V\"#g" index.html
+          grep -n "?v=" index.html js/app.js | head
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

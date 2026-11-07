@@ -9,7 +9,7 @@ export const STATUSES = [
 ];
 
 export const DEFAULT_SETTINGS = {
-  schema: 2,
+  schema: 3,
   numbering: { start: 1001 },
   business: {
     name: 'PIZZA-BAR בטאבון',
@@ -55,6 +55,7 @@ export const DEFAULT_SETTINGS = {
       minGuests: 15,
       minPrice: 2700,
       extraAdult: 150,
+      starterCount: 4,
     },
     {
       id: 'pizza',
@@ -66,6 +67,7 @@ export const DEFAULT_SETTINGS = {
       minGuests: 15,
       minPrice: 2100,
       extraAdult: 120,
+      starterCount: 0,
     },
   ],
   extension: { hourPrice: 500, halfHourPrice: 250 },
@@ -88,6 +90,8 @@ export const DEFAULT_SETTINGS = {
     { title: 'חומרי גלם מובחרים', text: 'בצק איכותי בהתפחה איטית של 72 שעות, חומרי גלם טריים ומגוון תוספות וטעמים.' },
   ],
   menuNote: 'כשבוע לפני מועד האירוע יש לבחור {מספר_פיצות} סוגי פיצות מתוך תפריט הפיצות.',
+  // מודפס בכרטיס התפריט כשבמסלול יש מנות ראשונות לבחירה
+  starterNote: 'יש לבחור {מספר_ראשונות} מנות ראשונות מתוך התפריט, בנוסף לפוקאצ׳ות.',
   // תנאים – ניתן להשתמש במשתנים: {מקדמה} {יתרה} {סכום} {דמי_ביטול_חלקיים} {מספר_פיצות}
   terms: [
     'מקדמה לשריון התאריך: {מקדמה}. המקדמה היא חלק מסכום ההצעה ומופחתת מהיתרה.',
@@ -153,6 +157,11 @@ export function withDefaults(saved) {
     out.menuNote = pizzaVar(out.menuNote);
     out.terms = out.terms.map(pizzaVar);
     out.schema = 2;
+  }
+  if (out.schema < 3) {
+    // גרסה 3: מספר מנות ראשונות לבחירה לכל מסלול
+    out.packages = out.packages.map((p) => ({ ...p, starterCount: p.starterCount ?? (p.id === 'full' ? 4 : 0) }));
+    out.schema = 3;
   }
   return out;
 }
