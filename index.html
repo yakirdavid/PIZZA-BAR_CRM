@@ -6,6 +6,19 @@
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#23392f">
   <title>PIZZA-BAR | הצעות מחיר</title>
+  <script>
+    // הגרסה נכתבת בזמן ההעלאה לאתר. אם הדפדפן טען גרסה ישנה מהזיכרון – טוענים מיד את העדכנית.
+    window.APP_VERSION = 'dev';
+    fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.v || j.v === window.APP_VERSION) return;
+        var key = 'pb_reload_' + j.v;
+        try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, '1'); } catch (e) {}
+        location.replace(location.pathname + '?v=' + j.v + location.hash);
+      })
+      .catch(function () {});
+  </script>
   <link rel="icon" href="assets/logo.png">
   <link rel="apple-touch-icon" href="assets/logo.png">
   <link rel="stylesheet" href="css/quote.css">
@@ -28,6 +41,7 @@
     מצב מקומי: הנתונים נשמרים בדפדפן זה בלבד. לשמירה בענן, גישה מכל מכשיר וכניסה מאובטחת – חברו את Supabase (ראו README).
   </div>
   <main id="main"></main>
+  <footer class="app-version" id="app-version"></footer>
   <div id="toasts"></div>
   <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busy-text"></span></div>
   <!-- אזור לא נראה שבו נבנים עמודי ההצעה להדפסה ול-PDF -->

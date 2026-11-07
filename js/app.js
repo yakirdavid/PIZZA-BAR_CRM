@@ -1,7 +1,7 @@
 import { createStore, isCloud } from './store.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
-import { esc, eventTypeLabel, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
+import { esc, eventTypeLabel, guestsText, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 
 // ---------- עזרים ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -130,6 +130,7 @@ window.addEventListener('hashchange', () => {
 async function route() {
   if (/^#(access_token|error|type)=/.test(location.hash)) history.replaceState(null, '', location.pathname + '#/');
   lastHash = location.hash;
+  $$('.modal-back').forEach((m) => m.remove()); // חלון פתוח (למשל וואטסאפ) נסגר במעבר דף
   const [, page, id] = (location.hash || '#/').split('/');
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === (page || 'list')));
   window.scrollTo(0, 0);
@@ -692,7 +693,7 @@ function renderEditor(q) {
         })}
         ${
           q.pricing.mode === 'perGuest'
-            ? field('מחיר למשתתף (₪)', 'pricing.perGuest', q, { type: 'number', min: 0, hint: 'מוכפל במספר המשתתפים לחיוב (ילד = חצי)' })
+            ? field('מחיר למבוגר (₪)', 'pricing.perGuest', q, { type: 'number', min: 0, hint: 'ילד משלם חצי מהמחיר' })
             : q.pricing.mode === 'total'
               ? field('מחיר המסלול (₪)', 'overrides.packagePrice', q, { type: 'number', min: 0, hint: 'סכום קבוע, לא משתנה לפי הכמות' })
               : `<div class="field"><span>מחיר לפי המחירון</span><div class="readonly">${formatILS(c.computedPackage)}</div></div>`
@@ -814,7 +815,7 @@ function renderEditor(q) {
     const row = (l, v, cls = '') => `<div class="sum-row ${cls}"><span>${l}</span><b>${v}</b></div>`;
     $('#summary').innerHTML = `
       <h3>סיכום מחיר</h3>
-      ${row('משתתפים לחיוב', formatGuests(c.billable))}
+      ${row('משתתפים', esc(guestsText(q)) || '—')}
       ${row(`מסלול ${esc(q.pkg.name || '')}${c.pricingMode === 'perGuest' ? ` (${formatILS(c.perGuestPrice)} למשתתף)` : c.pricingMode === 'total' ? ' (ידני)' : ''}`, formatILS(c.packagePrice))}
       ${row('זמן הגשה', esc(servingText()), 'muted')}
       ${c.extPrice ? row('הארכה', formatILS(c.extPrice)) : ''}
@@ -823,7 +824,7 @@ function renderEditor(q) {
       ${c.customTotal ? row('סעיפים חופשיים', formatILS(c.customTotal)) : ''}
       ${c.discount ? row('הנחה', '− ' + formatILS(c.discount), 'neg') : ''}
       ${row('סה״כ', formatILS(c.total), 'total')}
-      ${c.billable ? row('ממוצע למשתתף', formatILS(c.perGuest), 'muted') : ''}
+      ${c.billable ? row('ממוצע למבוגר', formatILS(c.perGuest), 'muted') : ''}
       ${c.max ? row(`במקרה של ${formatGuests(c.max.guests)} משתתפים`, formatILS(c.max.total), 'muted') : ''}
       ${row('מקדמה', formatILS(c.deposit))}
       ${row('יתרה', formatILS(c.balance))}
@@ -835,7 +836,7 @@ function renderEditor(q) {
     $('#mobile-total').innerHTML = `<span>סה״כ <b>${formatILS(c.total)}</b></span><span>מקדמה ${formatILS(c.deposit)}</span>`;
     const calcEl = $('#pkg-calc');
     if (calcEl)
-      calcEl.innerHTML = `משתתפים לחיוב: <b>${formatGuests(c.billable)}</b> · מחיר המסלול: <b>${formatILS(c.packagePrice)}</b>${
+      calcEl.innerHTML = `${guestsText(q) ? `המחיר מחושב ל-<b>${esc(guestsText(q))}</b> · ` : ''}מחיר המסלול: <b>${formatILS(c.packagePrice)}</b>${
         c.pricingMode === 'auto' ? '' : ` <small>(לפי המחירון: ${formatILS(c.computedPackage)})</small>`
       }`;
     const servEl = $('#serving');
@@ -1556,6 +1557,7 @@ function renderServerDown(err) {
 }
 
 async function start() {
+  $('#app-version').textContent = `גרסה ${window.APP_VERSION || 'dev'}`;
   busy(true, 'טוען...');
   try {
     state.store = await createStore();

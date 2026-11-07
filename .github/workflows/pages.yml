@@ -32,6 +32,9 @@ jobs:
           V="${GITHUB_SHA::8}"
           sed -i -E "s#(from '\./[a-z-]+\.js)'#\1?v=$V'#g" js/*.js
           sed -i -E "s#(src|href)=\"((js|css|vendor)/[A-Za-z0-9._-]+\.(js|css))\"#\1=\"\2?v=$V\"#g" index.html
+          sed -i "s#window.APP_VERSION = 'dev';#window.APP_VERSION = '$V';#" index.html
+          echo "{\"v\":\"$V\"}" > version.json
+          grep -c "APP_VERSION = '$V'" index.html
           grep -n "?v=" index.html js/app.js | head
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
