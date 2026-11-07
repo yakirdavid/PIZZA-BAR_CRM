@@ -296,20 +296,125 @@ export async function renderPages(stage, q, images) {
   return stage.querySelectorAll('.q-page').length;
 }
 
-export async function pagesToPdf(stage, filename) {
+// ---------- הפקת PDF ----------
+// הדפדפן מצייר כל עמוד לתמונה. כדי שה-PDF ייראה בדיוק כמו התצוגה בכל דפדפן (כולל אייפון):
+// התמונות והגופן מוטמעים מראש, וכל עמוד נבדק שהתמונות בו לא יצאו ריקות – ואם כן, מצויר שוב.
+const blobToDataUrl = (blob) =>
+  new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+
+let fontCssPromise;
+function fontEmbedCss() {
+  fontCssPromise ??= (async () => {
+    const faces = [
+      ['assets/fonts/heebo-hebrew.woff2', 'U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F'],
+      ['assets/fonts/heebo-latin.woff2', 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD'],
+    ];
+    const css = await Promise.all(
+      faces.map(async ([url, range]) => {
+        const data = await blobToDataUrl(await (await fetch(url)).blob());
+        return `@font-face{font-family:'Heebo';font-style:normal;font-weight:400 800;src:url(${data}) format('woff2');unicode-range:${range};}`;
+      })
+    );
+    return css.join('\n');
+  })();
+  return fontCssPromise;
+}
+
+async function inlineImages(root) {
+  await Promise.all(
+    [...root.querySelectorAll('img')].map(async (img) => {
+      if (!img.src.startsWith('data:')) img.src = await blobToDataUrl(await (await fetch(img.src)).blob());
+      try {
+        await img.decode();
+      } catch {}
+    })
+  );
+}
+
+// אזור תמונה "ריק" = כמעט בלי שונות בצבע (תמונה אמיתית תמיד מגוונת)
+function imagesRendered(canvas, page, ratio) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const base = page.getBoundingClientRect();
+  return [...page.querySelectorAll('img')].every((img) => {
+    const r = img.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return true;
+    const x = Math.round((r.left - base.left + r.width * 0.2) * ratio);
+    const y = Math.round((r.top - base.top + r.height * 0.2) * ratio);
+    const w = Math.max(1, Math.round(r.width * 0.6 * ratio));
+    const h = Math.max(1, Math.round(r.height * 0.6 * ratio));
+    const d = ctx.getImageData(x, y, w, h).data;
+    let min = 255, max = 0;
+    for (let i = 0; i < d.length; i += 16) {
+      const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return max - min > 24;
+  });
+}
+
+// עמוד שיצא ריק לגמרי (בלי טקסט) – גם הוא מצויר שוב
+function hasContent(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let dark = 0;
+  for (let i = 0; i < d.length; i += 4 * 97) if (d[i] + d[i + 1] + d[i + 2] < 300) dark++;
+  return dark > 50;
+}
+
+async function renderPageCanvas(page) {
+  const ratio = 2;
+  const opts = {
+    pixelRatio: ratio,
+    width: 794,
+    height: 1123,
+    backgroundColor: '#ffffff',
+    cacheBust: false,
+    fontEmbedCSS: await fontEmbedCss(),
+  };
+  let canvas;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    canvas = await window.htmlToImage.toCanvas(page, opts);
+    if (hasContent(canvas) && imagesRendered(canvas, page, ratio)) break;
+    await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+  }
+  return canvas;
+}
+
+// מצייר את כל עמודי המסמך לתמונות – אותן תמונות משמשות לתצוגה המקדימה ול-PDF
+export async function renderStageCanvases(stage) {
+  await inlineImages(stage);
+  if (document.fonts?.ready) await document.fonts.ready;
+  const canvases = [];
+  for (const page of stage.querySelectorAll('.q-page')) canvases.push(await renderPageCanvas(page));
+  return canvases;
+}
+
+// מחזיר את ה-PDF כקובץ (Blob)
+export async function pagesToPdfBlob(stage, title) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
-  const pages = [...stage.querySelectorAll('.q-page')];
-  for (let i = 0; i < pages.length; i++) {
-    const data = await window.htmlToImage.toJpeg(pages[i], {
-      pixelRatio: 2,
-      quality: 0.92,
-      backgroundColor: '#ffffff',
-      cacheBust: false,
-    });
+  const canvases = await renderStageCanvases(stage);
+  for (let i = 0; i < canvases.length; i++) {
+    const canvas = canvases[i];
     if (i) pdf.addPage();
-    pdf.addImage(data, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
   }
-  pdf.setProperties({ title: filename.replace(/\.pdf$/, '') });
-  pdf.save(filename);
+  pdf.setProperties({ title });
+  return pdf.output('blob');
+}
+
+export function saveBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }

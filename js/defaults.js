@@ -98,6 +98,11 @@ export const DEFAULT_SETTINGS = {
     'תנאי הביטול כפופים לדין החל.',
   ],
   internal: { costPerGuest: 0, fixedCost: 0, commissionPercent: 0 },
+  // הודעת וואטסאפ – משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}
+  whatsapp: {
+    message:
+      'שלום {שם_לקוח} 👋\nמצורפת הצעת המחיר מ-PIZZA-BAR בטאבון ל{סוג_אירוע} ({תאריך_אירוע}):\n{קישור}\n\nנשמח לענות על כל שאלה 🍕',
+  },
   menu: {
     starters: [
       { name: 'כרובית על טחינה', desc: 'שמן זית, בצל ירוק ושקדים קלויים' },
@@ -137,7 +142,7 @@ export function withDefaults(saved) {
   const d = clone(DEFAULT_SETTINGS);
   if (!saved) return d;
   const out = { ...d, ...saved };
-  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu', 'quoteDefaults']) {
+  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu', 'quoteDefaults', 'whatsapp']) {
     out[k] = { ...d[k], ...(saved[k] || {}) };
   }
   if ((saved.schema || 1) < 2) {

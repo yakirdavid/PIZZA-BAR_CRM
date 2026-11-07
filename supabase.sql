@@ -38,3 +38,15 @@ end;
 $$;
 
 grant execute on function public.pb_next_number(int) to authenticated;
+
+-- ---------------------------------------------------------------
+-- אחסון קבצי PDF לשליחה ללקוח בוואטסאפ (קישור להורדה)
+-- (אפשר להריץ גם לבד – זה התוכן של supabase-storage.sql)
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('quotes', 'quotes', true, 10485760, array['application/pdf'])
+on conflict (id) do nothing;
+
+drop policy if exists "pb upload own quote pdfs" on storage.objects;
+create policy "pb upload own quote pdfs" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'quotes' and (storage.foldername(name))[1] = auth.uid()::text);

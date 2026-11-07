@@ -1,7 +1,7 @@
 import { createStore, isCloud } from './store.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
-import { esc, eventTypeLabel, renderPages, pagesToPdf, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
+import { esc, eventTypeLabel, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 
 // ---------- עזרים ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -297,6 +297,7 @@ function renderList() {
                   <a class="icon" href="#/edit/${q.id}" title="עריכה">✎</a>
                   <button class="icon" data-act="dup" title="שכפול">⧉</button>
                   <button class="icon" data-act="pdf" title="הורדת PDF">⬇</button>
+                  <button class="icon" data-act="wa" title="שליחה בוואטסאפ">💬</button>
                   <button class="icon danger" data-act="del" title="מחיקה">🗑</button>
                 </td>
               </tr>`;
@@ -328,6 +329,7 @@ function renderList() {
     const q = state.quotes.find((x) => x.id === btn.closest('tr').dataset.id);
     if (btn.dataset.act === 'dup') duplicateQuote(q);
     if (btn.dataset.act === 'pdf') downloadPdf(q);
+    if (btn.dataset.act === 'wa') openWhatsApp(q);
     if (btn.dataset.act === 'del') deleteQuote(q);
   });
 }
@@ -381,31 +383,179 @@ function withLiveBrand(q) {
 }
 
 // frozen – עותק PDF שהופק בעבר: מציגים אותו בדיוק כפי שהיה
-async function prepareStage(q, { frozen = false } = {}) {
+async function prepareStage(q, { frozen = false, stage = $('#doc-stage') } = {}) {
   const doc = frozen ? q : withLiveBrand(q);
   const imgs = await resolveImages(doc.brand?.images);
-  return renderPages($('#doc-stage'), doc, imgs);
+  return renderPages(stage, doc, imgs);
 }
 
-// מפיק PDF ושומר עותק (צילום מצב של ההצעה ברגע ההפקה)
-async function downloadPdf(q, { saveCopy = true, frozen = false } = {}) {
+// התצוגה המקדימה מציגה את אותן תמונות עמוד שנכנסות ל-PDF, כך שהם זהים לגמרי
+let previewToken = 0;
+async function renderPdfPreview(q, preview) {
+  const token = ++previewToken;
+  const stage = document.createElement('div');
+  stage.className = 'offstage';
+  document.body.append(stage);
+  try {
+    await prepareStage(q, { stage });
+    const canvases = await renderStageCanvases(stage);
+    if (token !== previewToken || !preview.isConnected) return;
+    preview.replaceChildren(
+      ...canvases.map((c, i) => {
+        const img = new Image();
+        img.className = 'q-page-img';
+        img.alt = `עמוד ${i + 1}`;
+        img.src = c.toDataURL('image/jpeg', 0.9);
+        return img;
+      })
+    );
+    preview.classList.add('pdf-ready');
+  } catch (err) {
+    console.error('preview render failed', err); // נשארת התצוגה הרגילה
+  } finally {
+    stage.remove();
+  }
+}
+
+// מפיק את קובץ ה-PDF ושומר עותק בהצעה (צילום מצב של ההצעה ברגע ההפקה)
+async function generatePdf(q, { saveCopy = true, frozen = false, upload = false } = {}) {
+  const doc = frozen ? q : withLiveBrand(q);
+  await prepareStage(doc, { frozen: true });
+  const name = pdfName(doc);
+  const blob = await pagesToPdfBlob($('#doc-stage'), name.replace(/\.pdf$/, ''));
+  let url = null;
+  let uploadError = null;
+  if (upload) {
+    try {
+      url = await state.store.uploadPdf(blob, doc.number);
+    } catch (err) {
+      uploadError = err;
+    }
+  }
+  if (saveCopy && q.id) {
+    const { generated, ...snap } = doc;
+    const copy = { at: new Date().toISOString(), total: calcQuote(doc).total, snapshot: clone(snap) };
+    if (url) copy.url = url;
+    q.generated = [copy, ...(generated || [])].slice(0, 15);
+    await persist(q);
+  }
+  return { blob, name, url, uploadError, doc };
+}
+
+async function downloadPdf(q, opts = {}) {
   busy(true, 'מפיק PDF...');
   try {
-    const doc = frozen ? q : withLiveBrand(q);
-    await prepareStage(doc, { frozen: true });
-    await pagesToPdf($('#doc-stage'), pdfName(doc));
-    if (saveCopy && q.id) {
-      const { generated, ...snap } = doc;
-      q.generated = [{ at: new Date().toISOString(), total: calcQuote(q).total, snapshot: clone(snap) }, ...(generated || [])].slice(0, 15);
-      await persist(q);
-    }
-    toast('ה-PDF הורד ונשמר עותק בהצעה');
+    const { blob, name } = await generatePdf(q, opts);
+    saveBlob(blob, name);
+    toast(opts.saveCopy === false ? 'ה-PDF הורד' : 'ה-PDF הורד ונשמר עותק בהצעה');
   } catch (err) {
     console.error(err);
     toast('שגיאה בהפקת PDF: ' + err.message, 'error');
   } finally {
     busy(false);
   }
+}
+
+// ---------- שליחה בוואטסאפ ----------
+function waMessage(q, link) {
+  const c = calcQuote(q);
+  const msg = (state.settings.whatsapp?.message || '')
+    .replaceAll('{שם_לקוח}', q.customer?.name || '')
+    .replaceAll('{סוג_אירוע}', eventTypeLabel(q))
+    .replaceAll('{תאריך_אירוע}', eventDateShort(q) || '')
+    .replaceAll('{מספר_הצעה}', String(q.number ?? ''))
+    .replaceAll('{סכום}', formatILS(c.total))
+    .replaceAll('{קישור}', link || '');
+  return msg
+    .replace(/[ \t]*\(\s*\)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function openWhatsApp(q) {
+  const hasPhone = normPhone(q.customer?.phone).length >= 9;
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <div class="modal card" role="dialog" aria-label="שליחה בוואטסאפ">
+      <div class="modal-head"><h2>💬 שליחת הצעה ${esc(q.number)} בוואטסאפ</h2><button class="icon" data-x title="סגירה">✕</button></div>
+      <div class="wa-status" id="wa-status"><span class="spinner small"></span> מכין את ה-PDF…</div>
+      <div id="wa-body" hidden>
+        <label class="field"><span>ההודעה (אפשר לערוך)</span><textarea id="wa-msg" rows="6"></textarea></label>
+        <div class="wa-actions">
+          <button class="btn wa-btn" id="wa-customer" ${hasPhone ? '' : 'disabled'}>💬 ללקוח: ${esc(q.customer?.name || '')} <span dir="ltr">${esc(q.customer?.phone || 'אין טלפון')}</span></button>
+          <div class="wa-other">
+            <input type="tel" id="wa-phone" dir="ltr" placeholder="מספר אחר: 050-1234567" inputmode="tel">
+            <button class="btn" id="wa-other-send">שליחה</button>
+          </div>
+          <button class="btn ghost" id="wa-pick">👥 בחירת איש קשר בוואטסאפ</button>
+          <button class="btn ghost" id="wa-share" hidden>📎 שיתוף קובץ ה-PDF (בוחרים וואטסאפ ונמען)</button>
+          <button class="btn ghost" id="wa-download">⬇ הורדת ה-PDF</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.addEventListener('click', (e) => {
+    if (e.target === back || e.target.closest('[data-x]')) close();
+  });
+
+  let result;
+  try {
+    result = await generatePdf(q, { upload: true });
+  } catch (err) {
+    $('#wa-status', back).innerHTML = `⚠️ שגיאה בהפקת ה-PDF: ${esc(err.message)}`;
+    return;
+  }
+  const { blob, name, url, uploadError } = result;
+  const file = new File([blob], name, { type: 'application/pdf' });
+  const canShareFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+
+  let status;
+  if (url) status = '✅ ה-PDF מוכן, והקישור אליו נוסף להודעה. הלקוח יפתח אותו בלחיצה.';
+  else if (uploadError?.code === 'nobucket')
+    status = '⚠️ ה-PDF מוכן, אבל עדיין אין אחסון לקישור. צריך להריץ פעם אחת את הקובץ supabase-storage.sql ב-Supabase (הסבר ב-README). בינתיים: "שיתוף קובץ ה-PDF" או הורדה וצירוף ידני.';
+  else if (uploadError) status = `⚠️ ה-PDF מוכן, אבל העלאת הקישור נכשלה (${esc(uploadError.message)}). אפשר לשתף את הקובץ עצמו.`;
+  else status = 'ℹ️ ה-PDF מוכן. במצב מקומי אין קישור – שתפו את הקובץ או הורידו וצרפו אותו.';
+  $('#wa-status', back).innerHTML = status;
+  $('#wa-msg', back).value = waMessage(result.doc, url);
+  $('#wa-body', back).hidden = false;
+  $('#wa-share', back).hidden = !canShareFile;
+  renderSideCopies(q);
+
+  const markSent = async () => {
+    if (q.status !== 'draft') return;
+    await setStatus(q, 'sent');
+    const sel = $('#v-status');
+    if (sel) {
+      sel.value = 'sent';
+      sel.className = 'status-select badge sent';
+    }
+  };
+  const openChat = (phone) => {
+    const text = encodeURIComponent($('#wa-msg', back).value);
+    const target = phone ? `https://wa.me/${waPhone(phone)}?text=${text}` : `https://wa.me/?text=${text}`;
+    const w = window.open(target, '_blank', 'noopener');
+    if (!w) location.href = target;
+    markSent();
+  };
+  $('#wa-customer', back).addEventListener('click', () => openChat(q.customer.phone));
+  $('#wa-other-send', back).addEventListener('click', () => {
+    const ph = $('#wa-phone', back).value.trim();
+    if (!validPhone(ph)) return toast('מספר לא תקין – 10 ספרות שמתחילות ב-05', 'error');
+    openChat(ph);
+  });
+  $('#wa-pick', back).addEventListener('click', () => openChat(null));
+  $('#wa-share', back).addEventListener('click', async () => {
+    try {
+      await navigator.share({ files: [file], text: $('#wa-msg', back).value });
+      markSent();
+    } catch (err) {
+      if (err.name !== 'AbortError') toast('השיתוף נכשל: ' + err.message, 'error');
+    }
+  });
+  $('#wa-download', back).addEventListener('click', () => saveBlob(blob, name));
 }
 
 // ---------- עורך הצעה ----------
@@ -831,7 +981,8 @@ async function renderView(q) {
         <a class="btn ghost" href="#/edit/${q.id}">✎ עריכה</a>
         <button class="btn ghost" id="v-dup">⧉ שכפול</button>
         <button class="btn ghost" id="v-print">🖨 הדפסה</button>
-        <button class="btn primary" id="v-pdf">⬇ הורדת PDF</button>
+        <button class="btn ghost" id="v-pdf">⬇ הורדת PDF</button>
+        <button class="btn primary wa-main" id="v-wa">💬 שליחה בוואטסאפ</button>
         <button class="btn ghost danger" id="v-del">🗑</button>
       </div>
     </div>
@@ -845,17 +996,7 @@ async function renderView(q) {
         <div class="sum-row muted"><span>🔒 עמלה</span><b>${formatILS(c.internal.commission)}</b></div>
         <div class="sum-row muted"><span>🔒 רווח משוער</span><b>${formatILS(c.internal.profit)}</b></div>
         ${q.internalNotes ? `<div class="internal-notes"><b>הערות פנימיות:</b><br>${esc(q.internalNotes).replace(/\n/g, '<br>')}</div>` : ''}
-        <h3>עותקי PDF שהופקו</h3>
-        ${
-          q.generated?.length
-            ? `<ul class="copies">${q.generated
-                .map(
-                  (g, i) => `<li><span>${new Date(g.at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })} · ${formatILS(g.total)}</span><button class="btn small ghost" data-copy="${i}">⬇</button></li>`
-                )
-                .join('')}</ul>`
-            : '<p class="hint">עדיין לא הופק PDF. בכל הורדה נשמר עותק של ההצעה כפי שהייתה ברגע ההפקה.</p>'
-        }
-        ${q.customer?.phone ? `<a class="btn small ghost wa" target="_blank" rel="noopener" href="https://wa.me/${waPhone(q.customer.phone)}">💬 פתיחת וואטסאפ ללקוח</a>` : ''}
+        <div id="copies-box">${copiesHtml(q)}</div>
       </aside>
     </div>`;
 
@@ -863,6 +1004,7 @@ async function renderView(q) {
   const preview = $('#preview');
   preview.innerHTML = '';
   $$('#doc-stage .q-page').forEach((p) => preview.append(p.cloneNode(true)));
+  renderPdfPreview(q, preview);
   const fit = () => {
     const w = $('.preview-wrap')?.clientWidth;
     if (w) preview.style.zoom = Math.min(1, (w - 24) / 794);
@@ -883,15 +1025,33 @@ async function renderView(q) {
   });
   $('#v-pdf').addEventListener('click', async () => {
     await downloadPdf(q);
-    renderView(q);
+    renderSideCopies(q);
   });
-  $$('[data-copy]').forEach((b) =>
-    b.addEventListener('click', async () => {
-      const g = q.generated[+b.dataset.copy];
-      await downloadPdf({ ...g.snapshot, generated: [] }, { saveCopy: false, frozen: true });
-      prepareStage(q);
-    })
-  );
+  $('#v-wa').addEventListener('click', () => openWhatsApp(q));
+  $('#copies-box').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    const g = q.generated[+b.dataset.copy];
+    await downloadPdf({ ...g.snapshot, generated: [] }, { saveCopy: false, frozen: true });
+  });
+}
+
+function copiesHtml(q) {
+  return `<h3>עותקי PDF שהופקו</h3>${
+    q.generated?.length
+      ? `<ul class="copies">${q.generated
+          .map(
+            (g, i) => `<li><span>${new Date(g.at).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })} · ${formatILS(g.total)}</span>
+              <span>${g.url ? `<a class="btn small ghost" href="${esc(g.url)}" target="_blank" rel="noopener" title="הקישור שנשלח">🔗</a>` : ''}<button class="btn small ghost" data-copy="${i}" title="הורדת העותק">⬇</button></span></li>`
+          )
+          .join('')}</ul>`
+      : '<p class="hint">עדיין לא הופק PDF. בכל הורדה או שליחה נשמר עותק של ההצעה כפי שהייתה באותו רגע.</p>'
+  }`;
+}
+
+function renderSideCopies(q) {
+  const box = $('#copies-box');
+  if (box) box.innerHTML = copiesHtml(q);
 }
 
 function waPhone(p) {
@@ -1119,6 +1279,10 @@ async function renderSettings() {
           ${field('עלות קבועה לאירוע', 'internal.fixedCost', s, { type: 'number' })}
           ${field('עמלה (%)', 'internal.commissionPercent', s, { type: 'number' })}
         </div>`
+      ),
+      sec(
+        '💬 הודעת וואטסאפ',
+        `${field('נוסח ההודעה ללקוח', 'whatsapp.message', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}' })}`
       ),
       sec(
         'ברירות מחדל להצעה חדשה',

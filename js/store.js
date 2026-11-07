@@ -67,6 +67,10 @@ class LocalStore {
     this._set('pb_counter', next);
     return next;
   }
+  // אין אחסון קבצים במצב מקומי – אין קישור לשליחה
+  async uploadPdf() {
+    return null;
+  }
   async saveImage(dataUrl) {
     const imgs = this._get('pb_images', {});
     const id = uid();
@@ -176,6 +180,9 @@ class CloudStore {
       tx.set(ref, { value: next });
       return next;
     });
+  }
+  async uploadPdf() {
+    return null; // Firebase Storage דורש תוכנית בתשלום
   }
   async saveImage(dataUrl) {
     const id = uid();
@@ -346,6 +353,17 @@ class SupabaseStore {
   }
   async nextNumber(start) {
     return this._check(await this.sb.rpc('pb_next_number', { start_at: start }));
+  }
+  // מעלה את ה-PDF לאחסון (bucket ציבורי quotes, שם קובץ אקראי) ומחזיר קישור לשליחה ללקוח
+  async uploadPdf(blob, number) {
+    const path = `${this.user.id}/${number}-${uid()}${uid()}.pdf`;
+    const bucket = this.sb.storage.from('quotes');
+    const { error } = await bucket.upload(path, blob, { contentType: 'application/pdf', cacheControl: '31536000' });
+    if (error) {
+      if (/bucket not found|row-level security|not found|unauthorized/i.test(error.message)) throw storeError('nobucket', error.message);
+      throw new Error(error.message);
+    }
+    return bucket.getPublicUrl(path).data.publicUrl;
   }
   async saveImage(dataUrl) {
     const id = uid();
