@@ -202,6 +202,10 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .login { max-width: 380px; margin: 50px auto; display: flex; flex-direction: column; gap: 14px; text-align: center; }
 .login-logo { width: 110px; margin: 0 auto; }
 .login h1 { font-size: 19px; }
+.pass-wrap { position: relative; display: block; }
+.pass-wrap input { padding-left: 44px; }
+.pass-wrap .icon { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); }
+.login-help { text-align: right; background: #fff4d6; border-radius: 8px; padding: 10px 12px; margin: 0; color: #6b5200; }
 .login.down { text-align: right; max-width: 460px; }
 .login.down h1, .login.down .login-logo { text-align: center; }
 .login.down ol { margin: 0; padding-right: 20px; line-height: 1.9; }

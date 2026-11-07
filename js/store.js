@@ -298,14 +298,12 @@ class SupabaseStore {
     };
     this.sb.auth.onAuthStateChange((event, session) => {
       emit(session?.user ?? null);
-      if (event === 'PASSWORD_RECOVERY') setTimeout(() => this._askNewPassword(), 300);
+      // הגעה מקישור "איפוס סיסמה" במייל – האפליקציה מציגה מסך לבחירת סיסמה חדשה
+      if (event === 'PASSWORD_RECOVERY') setTimeout(() => this.onRecovery?.(), 300);
     });
   }
-  async _askNewPassword() {
-    const pw = prompt('הזינו סיסמה חדשה (לפחות 6 תווים):');
-    if (!pw) return;
-    const { error } = await this.sb.auth.updateUser({ password: pw });
-    alert(error ? 'עדכון הסיסמה נכשל: ' + error.message : 'הסיסמה עודכנה');
+  async setNewPassword(password) {
+    this._check(await this.sb.auth.updateUser({ password }));
   }
   async signIn(email, password) {
     const timeout = new Promise((_, rej) => setTimeout(() => rej(storeError('down', 'השרת לא הגיב בזמן')), 15000));
@@ -320,9 +318,10 @@ class SupabaseStore {
     await this.sb.auth.signOut();
   }
   async resetPassword(email) {
-    this._check(
-      await this.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname })
-    );
+    const { error } = await this.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    if (!error) return;
+    if (error.status === 429 || /rate limit/i.test(error.message)) throw storeError('rate', error.message);
+    throw new Error(error.message);
   }
 
   async getSettings() {

@@ -128,6 +128,7 @@ window.addEventListener('hashchange', () => {
 });
 
 async function route() {
+  if (/^#(access_token|error|type)=/.test(location.hash)) history.replaceState(null, '', location.pathname + '#/');
   lastHash = location.hash;
   const [, page, id] = (location.hash || '#/').split('/');
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === (page || 'list')));
@@ -1264,15 +1265,26 @@ function renderLogin() {
       <img src="assets/logo.png" alt="" class="login-logo">
       <h1>כניסה למערכת הצעות המחיר</h1>
       <label class="field"><span>אימייל</span><input type="email" id="l-email" required dir="ltr" autocomplete="username"></label>
-      <label class="field"><span>סיסמה</span><input type="password" id="l-pass" required dir="ltr" autocomplete="current-password"></label>
+      <label class="field"><span>סיסמה</span>
+        <span class="pass-wrap"><input type="password" id="l-pass" required dir="ltr" autocomplete="current-password">
+        <button type="button" class="icon" id="l-show" title="הצגת הסיסמה" aria-label="הצגת הסיסמה">👁</button></span></label>
       <button class="btn primary" type="submit">כניסה</button>
       <button class="btn ghost small" type="button" id="l-reset">שכחתי סיסמה</button>
+      <p class="hint login-help" id="l-help" hidden></p>
     </form>`;
+  const help = (html) => {
+    $('#l-help').innerHTML = html;
+    $('#l-help').hidden = false;
+  };
+  $('#l-show').addEventListener('click', () => {
+    const el = $('#l-pass');
+    el.type = el.type === 'password' ? 'text' : 'password';
+  });
   $('#login').addEventListener('submit', async (e) => {
     e.preventDefault();
     busy(true, 'מתחבר...');
     try {
-      await state.store.signIn($('#l-email').value.trim(), $('#l-pass').value);
+      await state.store.signIn($('#l-email').value.trim().toLowerCase(), $('#l-pass').value);
     } catch (err) {
       if (err.code === 'down') return renderServerDown(err);
       const msg = {
@@ -1280,6 +1292,8 @@ function renderLogin() {
         unconfirmed: 'המשתמש לא אושר – ב-Supabase: Authentication → Users → לסמן את המשתמש כמאושר',
       }[err.code];
       toast(msg || 'הכניסה נכשלה: ' + err.message, 'error');
+      if (err.code === 'credentials')
+        help('אם הסיסמה מולאה אוטומטית, ייתכן שהדפדפן שמר סיסמה ישנה – לחצו 👁 כדי לבדוק. אפשר גם לקבוע סיסמה חדשה ישירות ב-Supabase (ראו README).');
     } finally {
       busy(false);
     }
@@ -1287,11 +1301,45 @@ function renderLogin() {
   $('#l-reset').addEventListener('click', async () => {
     const email = $('#l-email').value.trim();
     if (!email) return toast('הזינו אימייל ואז לחצו שוב', 'error');
+    busy(true, 'שולח...');
     try {
-      await state.store.resetPassword(email);
-      toast('נשלח מייל לאיפוס סיסמה');
+      await state.store.resetPassword(email.toLowerCase());
+      help(`אם קיים משתמש עם הכתובת <b dir="ltr">${esc(email)}</b>, יישלח אליו מייל מ-Supabase Auth בדקות הקרובות. בדקו גם בתיקיית הספאם. בקישור שבמייל בוחרים סיסמה חדשה.`);
     } catch (err) {
-      toast(err.message, 'error');
+      if (err.code === 'rate') help('נשלחו יותר מדי מיילים בזמן קצר (מגבלה של השרת החינמי). נסו שוב בעוד שעה, או קבעו סיסמה חדשה ישירות ב-Supabase.');
+      else toast(err.message, 'error');
+    } finally {
+      busy(false);
+    }
+  });
+}
+
+// מסך בחירת סיסמה חדשה (אחרי לחיצה על הקישור במייל)
+function renderSetPassword() {
+  busy(false);
+  document.body.classList.add('logged-out');
+  $('#main').innerHTML = `
+    <form class="card login" id="newpass">
+      <img src="assets/logo.png" alt="" class="login-logo">
+      <h1>בחירת סיסמה חדשה</h1>
+      <label class="field"><span>סיסמה חדשה (לפחות 6 תווים)</span><input type="password" id="np1" required minlength="6" dir="ltr" autocomplete="new-password"></label>
+      <label class="field"><span>שוב, לאימות</span><input type="password" id="np2" required minlength="6" dir="ltr" autocomplete="new-password"></label>
+      <button class="btn primary" type="submit">שמירת הסיסמה</button>
+    </form>`;
+  $('#newpass').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if ($('#np1').value !== $('#np2').value) return toast('הסיסמאות לא זהות', 'error');
+    busy(true, 'שומר...');
+    try {
+      await state.store.setNewPassword($('#np1').value);
+      toast('הסיסמה עודכנה');
+      document.body.classList.remove('logged-out');
+      go('#/');
+      route();
+    } catch (err) {
+      toast('עדכון הסיסמה נכשל: ' + err.message, 'error');
+    } finally {
+      busy(false);
     }
   });
 }
@@ -1333,6 +1381,13 @@ async function start() {
   if (!isCloud) $('#mode-banner').hidden = false;
   $('#logout').hidden = !isCloud;
   $('#logout').addEventListener('click', () => state.store.signOut());
+  state.store.onRecovery = renderSetPassword;
+  // קישור איפוס שפג תוקפו מחזיר שגיאה בכתובת
+  const hashParams = new URLSearchParams(location.hash.replace(/^#\/?/, ''));
+  if (hashParams.get('error_description')) {
+    toast('קישור האיפוס לא תקף: ' + hashParams.get('error_description').replace(/\+/g, ' ') + ' – בקשו קישור חדש', 'error');
+    history.replaceState(null, '', location.pathname + '#/');
+  }
 
   state.store.onAuth(async (user) => {
     busy(false);

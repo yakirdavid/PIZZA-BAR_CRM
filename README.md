@@ -45,6 +45,24 @@
 
 אם עבדתם קודם במצב מקומי: מורידים גיבוי במסך ההגדרות לפני החיבור, ומשחזרים אותו אחרי הכניסה.
 
+### שכחתי סיסמה / "אימייל או סיסמה שגויים"
+
+מיילים לאיפוס סיסמה מהשרת החינמי של Supabase מוגבלים לכמה מיילים בשעה ולפעמים מגיעים לספאם. בנוסף, אם המשתמש לא קיים, Supabase לא שולח מייל בכלל. הדרך הבטוחה היא לקבוע סיסמה ישירות:
+
+1. ב-Supabase נכנסים ל-**SQL Editor → New query**.
+2. בודקים אילו משתמשים קיימים:
+   ```sql
+   select email, email_confirmed_at, last_sign_in_at from auth.users;
+   ```
+3. קובעים סיסמה חדשה. מחליפים בשורה את הסיסמה ואת האימייל:
+   ```sql
+   update auth.users
+   set encrypted_password = extensions.crypt('הסיסמה-החדשה', extensions.gen_salt('bf', 10)),
+       email_confirmed_at = coalesce(email_confirmed_at, now())
+   where lower(email) = lower('your@email.com');
+   ```
+   התשובה צריכה להיות `Success. 1 row affected`. אם כתוב `0 rows`, המשתמש לא קיים, ויוצרים אותו ב-**Authentication → Users → Add user**.
+
 ### חלופה: Firebase
 
 אם מעדיפים Firebase, משאירים את `supabaseConfig` ריק וממלאים את `firebaseConfig`:
