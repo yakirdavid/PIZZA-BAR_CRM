@@ -25,5 +25,6 @@ jobs:
             echo "Supabase is not configured - skipping"; exit 0
           fi
           echo "Pinging $URL"
-          curl -fsS --max-time 30 --retry 2 "$URL/auth/v1/health" -H "apikey: $KEY" && echo
+          curl -fsS --max-time 30 --retry 2 "$URL/auth/v1/health" -H "apikey: $KEY"
+          echo
           curl -sS --max-time 30 "$URL/rest/v1/pb_docs?select=id&limit=1" -H "apikey: $KEY" || true; echo
