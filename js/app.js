@@ -1274,7 +1274,12 @@ function renderLogin() {
     try {
       await state.store.signIn($('#l-email').value.trim(), $('#l-pass').value);
     } catch (err) {
-      toast('הכניסה נכשלה – בדקו אימייל וסיסמה', 'error');
+      if (err.code === 'down') return renderServerDown(err);
+      const msg = {
+        credentials: 'אימייל או סיסמה שגויים',
+        unconfirmed: 'המשתמש לא אושר – ב-Supabase: Authentication → Users → לסמן את המשתמש כמאושר',
+      }[err.code];
+      toast(msg || 'הכניסה נכשלה: ' + err.message, 'error');
     } finally {
       busy(false);
     }
@@ -1292,13 +1297,37 @@ function renderLogin() {
 }
 
 // ---------- אתחול ----------
+// מסך כשהשרת לא זמין – במקום להיתקע או להציג "סיסמה שגויה"
+function renderServerDown(err) {
+  busy(false);
+  document.body.classList.add('logged-out');
+  const keyProblem = err?.code === 'key';
+  $('#main').innerHTML = `
+    <div class="card login down">
+      <img src="assets/logo.png" alt="" class="login-logo">
+      <h1>${keyProblem ? 'בעיה בהגדרות החיבור' : 'מסד הנתונים לא זמין כרגע'}</h1>
+      ${
+        keyProblem
+          ? '<p>מפתח ה-Supabase בקובץ ההגדרות לא תקין. הנתונים שלך לא נפגעו.</p>'
+          : `<p>הנתונים שלך שמורים ולא נמחקו. הסיבה הנפוצה: פרויקט Supabase חינמי <b>מושהה אוטומטית</b> אחרי שבוע ללא שימוש.</p>
+             <ol>
+               <li>נכנסים ל-<a href="https://supabase.com/dashboard" target="_blank" rel="noopener">supabase.com/dashboard</a></li>
+               <li>פותחים את הפרויקט ולוחצים <b>Restore project</b></li>
+               <li>מחכים 1–2 דקות ולוחצים "נסו שוב"</li>
+             </ol>`
+      }
+      <button class="btn primary" type="button" onclick="location.reload()">נסו שוב</button>
+      <small class="hint">פרטים טכניים: ${esc(err?.message || '')}</small>
+    </div>`;
+}
+
 async function start() {
   busy(true, 'טוען...');
   try {
     state.store = await createStore();
   } catch (err) {
     busy(false);
-    $('#main').innerHTML = `<div class="empty"><p>שגיאה בחיבור למסד הנתונים: ${esc(err.message)}</p></div>`;
+    renderServerDown(err);
     return;
   }
   if (!isCloud) $('#mode-banner').hidden = false;

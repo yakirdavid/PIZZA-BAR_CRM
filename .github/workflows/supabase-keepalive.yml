@@ -1,24 +1,29 @@
 # פרויקט Supabase חינמי מושהה אחרי שבוע ללא פעילות.
-# ה-workflow הזה פונה למסד הנתונים כל 3 ימים כדי שיישאר פעיל.
-# נדרשים Secrets במאגר: SUPABASE_URL, SUPABASE_ANON_KEY (Settings → Secrets and variables → Actions)
+# ה-workflow הזה פונה למסד הנתונים כל יום כדי שיישאר פעיל.
+# כתובת הפרויקט והמפתח הציבורי נלקחים מ-js/config.js (אפשר לדרוס עם Secrets: SUPABASE_URL, SUPABASE_ANON_KEY).
+# אם הפנייה נכשלת (למשל הפרויקט כבר מושהה) – ההרצה נכשלת ו-GitHub שולח מייל התראה.
 name: Supabase keep-alive
 
 on:
   schedule:
-    - cron: '17 6 */3 * *'
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Ping Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "Supabase secrets not set - skipping"; exit 0
+          URL="${SUPABASE_URL:-$(grep -oP "^\s*url: '\K[^']+" js/config.js | head -1)}"
+          KEY="${SUPABASE_ANON_KEY:-$(grep -oP "^\s*anonKey: '\K[^']+" js/config.js | head -1)}"
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "Supabase is not configured - skipping"; exit 0
           fi
-          curl -fsS "$SUPABASE_URL/rest/v1/pb_docs?select=id&limit=1" \
-            -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $SUPABASE_ANON_KEY"
+          echo "Pinging $URL"
+          curl -fsS --max-time 30 --retry 2 "$URL/auth/v1/health" -H "apikey: $KEY" && echo
+          curl -sS --max-time 30 "$URL/rest/v1/pb_docs?select=id&limit=1" -H "apikey: $KEY" || true; echo

@@ -209,6 +209,12 @@ class CloudStore {
   }
 }
 
+function storeError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
+
 // ---------- מצב ענן (Supabase Auth + Postgres) ----------
 // כל הנתונים בטבלה אחת pb_docs (ראו supabase.sql), מוגנת ב-RLS לפי המשתמש המחובר.
 function loadScript(src) {
@@ -226,11 +232,32 @@ class SupabaseStore {
   user = null;
 
   async init() {
+    await this._health();
     if (!window.supabase) await loadScript('vendor/supabase.js');
     this.sb = window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
     return this;
+  }
+
+  // בדיקה מהירה שהשרת זמין – פרויקט חינמי מושהה אחרי שבוע ללא שימוש ואז הבקשות נתקעות
+  async _health() {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let res;
+    try {
+      res = await fetch(supabaseConfig.url + '/auth/v1/health', {
+        headers: { apikey: supabaseConfig.anonKey },
+        signal: ctrl.signal,
+        cache: 'no-store',
+      });
+    } catch {
+      throw storeError('down', 'שרת מסד הנתונים לא מגיב');
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status === 401 || res.status === 403) throw storeError('key', 'מפתח החיבור ל-Supabase לא תקין');
+    if (!res.ok) throw storeError('down', `שרת מסד הנתונים לא זמין (${res.status})`);
   }
 
   _check({ data, error }) {
@@ -281,7 +308,13 @@ class SupabaseStore {
     alert(error ? 'עדכון הסיסמה נכשל: ' + error.message : 'הסיסמה עודכנה');
   }
   async signIn(email, password) {
-    this._check(await this.sb.auth.signInWithPassword({ email, password }));
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(storeError('down', 'השרת לא הגיב בזמן')), 15000));
+    const { error } = await Promise.race([this.sb.auth.signInWithPassword({ email, password }), timeout]);
+    if (!error) return;
+    if (/invalid login credentials/i.test(error.message)) throw storeError('credentials', error.message);
+    if (/email not confirmed/i.test(error.message)) throw storeError('unconfirmed', error.message);
+    if (error.status === 0 || error.status >= 500 || /fetch|network/i.test(error.message)) throw storeError('down', error.message);
+    throw new Error(error.message);
   }
   async signOut() {
     await this.sb.auth.signOut();
