@@ -1,4 +1,5 @@
 import { createStore, isCloud } from './store.js';
+import { parseRequest } from './parse-request.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
 import { esc, eventTypeLabel, guestsText, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
@@ -260,7 +261,10 @@ function renderList() {
   $('#main').innerHTML = `
     <div class="page-head">
       <h1>הצעות מחיר</h1>
-      <a class="btn primary" href="#/new">+ הצעה חדשה</a>
+      <div class="head-actions">
+        <button class="btn" id="paste-new">📋 הצעה מהודעה</button>
+        <a class="btn primary" href="#/new">+ הצעה חדשה</a>
+      </div>
     </div>
     <div class="stats">
       ${STATUSES.map(
@@ -314,6 +318,15 @@ function renderList() {
   draw();
 
   $('#flt-q').addEventListener('input', (e) => ((f.q = e.target.value), draw()));
+  $('#paste-new').addEventListener('click', () =>
+    openPasteDialog((parsed) => {
+      const q = newQuote();
+      applyParsed(q, parsed.values);
+      state.pendingDraft = q;
+      state.pendingPasteReport = parsed;
+      go('#/edit/draft');
+    })
+  );
   $('#flt-status').addEventListener('change', (e) => ((f.status = e.target.value), renderList()));
   $('#flt-type').addEventListener('change', (e) => ((f.type = e.target.value), draw()));
   $('#flt-sort').addEventListener('change', (e) => ((f.sort = e.target.value), draw()));
@@ -573,6 +586,9 @@ function renderEditor(q) {
   }
   const s = state.settings;
   let step = 0;
+  // דוח מילוי אוטומטי מהודעה (אם ההצעה נוצרה מהדבקת טקסט)
+  let pasteReport = state.pendingPasteReport || null;
+  state.pendingPasteReport = null;
   // השלמת שדות להצעות שנשמרו בגרסה קודמת
   q.pricing ??= { mode: pricingModeOf(q), perGuest: '' };
   q.display ??= { showBreakdown: true };
@@ -610,6 +626,7 @@ function renderEditor(q) {
       <h1>${q.id ? `עריכת הצעה ${esc(q.number)}` : 'הצעה חדשה'}</h1>
       <div class="head-actions">
         <a class="btn ghost" href="${q.id ? `#/view/${q.id}` : '#/'}">ביטול</a>
+        ${q.id ? '' : '<button class="btn ghost" id="paste-fill">📋 מילוי מהודעה</button>'}
         <button class="btn" id="save">שמירה</button>
         <button class="btn primary" id="save-view">שמירה ותצוגה מקדימה</button>
       </div>
@@ -857,6 +874,7 @@ function renderEditor(q) {
     }
     form.innerHTML =
       staleBanner() +
+      (step === 0 ? pasteBanner() : '') +
       sections[step]() +
       `<div class="step-nav">
         ${step > 0 ? '<button type="button" class="btn ghost" data-act="prev">→ הקודם</button>' : '<span></span>'}
@@ -909,6 +927,7 @@ function renderEditor(q) {
     if (act === 'next') step++;
     else if (act === 'prev') step--;
     else if (act === 'finish') return save(true);
+    else if (act === 'close-report') pasteReport = null;
     else if (act === 'del-addon') q.addons.splice(+b.dataset.i, 1);
     else if (act === 'add-custom') q.customItems.push({ name: '', amount: 0 });
     else if (act === 'del-custom') q.customItems.splice(+b.dataset.i, 1);
@@ -977,7 +996,96 @@ function renderEditor(q) {
   $('#save').addEventListener('click', () => save(false));
   $('#save-view').addEventListener('click', () => save(true));
 
+  function pasteBanner() {
+    if (!pasteReport) return '';
+    const list = (items) => `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    return `<div class="paste-report">
+      <div class="paste-report-head"><b>📋 הפרטים מולאו אוטומטית מההודעה – עברו עליהם לפני השמירה</b>
+        <button type="button" class="icon" data-act="close-report" title="הסתרה">✕</button></div>
+      ${list(pasteReport.filled)}
+      ${pasteReport.warnings.length ? `<div class="paste-warn"><b>⚠️ כדאי לבדוק:</b>${list(pasteReport.warnings)}</div>` : ''}
+      ${pasteReport.ignored.length ? `<details><summary>שורות שלא זוהו (${pasteReport.ignored.length})</summary>${list(pasteReport.ignored)}</details>` : ''}
+    </div>`;
+  }
+  $('#paste-fill')?.addEventListener('click', () =>
+    openPasteDialog((parsed) => {
+      applyParsed(q, parsed.values);
+      pasteReport = parsed;
+      state.dirty = true;
+      step = 0;
+      drawStep();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    })
+  );
+  if (pasteReport) state.dirty = true; // הצעה שנוצרה מהודעה עדיין לא נשמרה
+
   drawStep();
+}
+
+// ---------- הצעה מהודעה (הדבקת טקסט) ----------
+function applyParsed(q, v) {
+  const s = state.settings;
+  if (v.name) q.customer.name = v.name;
+  if (v.phone) q.customer.phone = v.phone;
+  if (v.email) q.customer.email = v.email;
+  if (v.eventType) {
+    q.event.type = v.eventType;
+    q.event.typeOther = v.eventTypeOther || '';
+  }
+  if (v.date) {
+    q.event.dateMode = 'exact';
+    q.event.date = v.date;
+  } else if (v.monthNum) {
+    q.event.dateMode = 'month';
+    q.event.monthNum = v.monthNum;
+    q.event.year = v.year;
+  }
+  if (v.startTime) q.event.startTime = v.startTime;
+  if (v.address) q.event.address = v.address;
+  for (const k of ['adults', 'children', 'infants']) if (v[k] != null) q.guests[k] = v[k];
+  const p = v.packageId && s.packages.find((x) => x.id === v.packageId);
+  if (p && p.id !== q.packageId) {
+    q.packageId = p.id;
+    q.pkg = clone(p);
+    q.starterCount = Number(p.starterCount) || 0;
+    q.overrides.packagePrice = '';
+    if (q.pricing?.mode === 'total') q.pricing.mode = 'auto';
+  }
+  if (v.notes) q.internalNotes = [q.internalNotes, `הערות הלקוח: ${v.notes}`].filter(Boolean).join('\n');
+}
+
+function openPasteDialog(onApply) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <div class="modal card" role="dialog" aria-label="הצעה מהודעה">
+      <div class="modal-head"><h2>📋 הצעה מהודעה</h2><button class="icon" data-x title="סגירה">✕</button></div>
+      <p class="hint">מדביקים את ההודעה מהלקוח (וואטסאפ או טופס), בפורמט "שדה: ערך" בכל שורה. המערכת ממלאת את ההצעה, ואתם רק עוברים על הפרטים.</p>
+      <textarea id="paste-text" rows="11" placeholder="שם: ...&#10;טלפון: ...&#10;סוג האירוע: ...&#10;תאריך: ...&#10;מבוגרים: ..."></textarea>
+      <div class="wa-actions">
+        ${navigator.clipboard?.readText ? '<button class="btn ghost" id="paste-clip">📥 הדבקה מהלוח</button>' : ''}
+        <button class="btn primary" id="paste-go">✨ מילוי ההצעה</button>
+      </div>
+    </div>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.addEventListener('click', (e) => {
+    if (e.target === back || e.target.closest('[data-x]')) close();
+  });
+  $('#paste-text', back).focus();
+  $('#paste-clip', back)?.addEventListener('click', async () => {
+    try {
+      $('#paste-text', back).value = await navigator.clipboard.readText();
+    } catch {
+      toast('אין גישה ללוח – הדביקו ידנית בתיבה (לחיצה ארוכה ← הדבק)', 'error');
+    }
+  });
+  $('#paste-go', back).addEventListener('click', () => {
+    const parsed = parseRequest($('#paste-text', back).value, state.settings);
+    if (!parsed.filled.length) return toast('לא זוהו פרטים בהודעה. ודאו שכל שורה בפורמט "שדה: ערך"', 'error');
+    close();
+    onApply(parsed);
+  });
 }
 
 // ---------- תצוגה מקדימה ----------

@@ -289,3 +289,11 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .wa-other .btn { width: auto; }
 .copies li > span:last-child { display: flex; gap: 4px; }
 .spinner.small { width: 16px; height: 16px; border-width: 3px; display: inline-block; vertical-align: middle; }
+
+/* דוח מילוי אוטומטי מהודעה */
+.paste-report { background: #eef7f0; border: 1px solid #b9dcc3; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
+.paste-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #1d5a32; }
+.paste-report ul { margin: 6px 0; padding-right: 20px; line-height: 1.7; }
+.paste-warn { background: #fff4d6; border-radius: 8px; padding: 6px 10px; margin-top: 6px; color: #6b5200; }
+.paste-report details { margin-top: 6px; color: var(--muted); }
+#paste-text { font-size: 15px; line-height: 1.6; }
