@@ -297,3 +297,50 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .paste-warn { background: #fff4d6; border-radius: 8px; padding: 6px 10px; margin-top: 6px; color: #6b5200; }
 .paste-report details { margin-top: 6px; color: var(--muted); }
 #paste-text { font-size: 15px; line-height: 1.6; }
+
+/* מדדי דף הנחיתה */
+:root {
+  --lp-bar: #1d8a5e;       /* עמודות ומדדים (נבדק מול רקע לבן) */
+  --lp-track: #dcefe5;     /* מסילה: גוון בהיר של אותו ירוק */
+  --lp-hot: #c4572c;       /* הדגשה: הנקודה שבה הכי הרבה עוזבים (תמיד עם טקסט) */
+  --lp-grid: #ece7df;
+}
+.lp-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.lp-tile { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+.lp-tile-label { font-size: 13px; color: var(--muted); }
+.lp-tile b { font-size: 26px; color: var(--green); font-weight: 700; line-height: 1.2; }
+.lp-tile small { font-size: 12px; color: var(--muted); }
+.lp-card { margin-bottom: 14px; }
+.lp-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.lp-two .lp-card { margin-bottom: 14px; min-width: 0; }
+.lp-insights { margin: 0; padding-right: 20px; line-height: 1.9; }
+.lp-insights b { color: var(--green); }
+.lp-daily { width: 100%; height: auto; display: block; }
+#lp-range { width: auto; }
+.lp-daily text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.lp-grid line { stroke: var(--lp-grid); stroke-width: 1; }
+.lp-col path { fill: var(--lp-bar); }
+.lp-col:hover path, .lp-col:focus path { fill: #146b48; }
+.lp-col:focus { outline: none; }
+.lp-meters { display: flex; flex-direction: column; gap: 8px; }
+.lp-meter { display: grid; grid-template-columns: minmax(110px, 38%) 1fr 44px; align-items: center; gap: 10px; font-size: 14px; border-radius: 6px; }
+.lp-meter:focus { outline: 2px solid rgba(29,138,94,.35); outline-offset: 2px; }
+.lp-meter-name em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--ink); background: #fbe6dd; border-radius: 6px; padding: 1px 6px; margin-right: 4px; white-space: nowrap; }
+.lp-meter-track { height: 12px; background: var(--lp-track); border-radius: 6px; overflow: hidden; }
+.lp-meter-track i { display: block; height: 100%; background: var(--lp-bar); border-radius: 6px; min-width: 2px; }
+.lp-meter.hot .lp-meter-track i { background: var(--lp-hot); }
+.lp-meter-val { font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; text-align: left; }
+.lp-table td:not(:first-child), .lp-table th:not(:first-child) { font-variant-numeric: tabular-nums; }
+.lp-tip { position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: #fff; font-size: 13px; padding: 6px 10px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.2); white-space: nowrap; }
+.lp-setup ol { line-height: 1.9; padding-right: 20px; }
+.lp-tips summary { cursor: pointer; color: var(--green); }
+.lp-tips ul { line-height: 1.9; padding-right: 20px; margin: 10px 0 0; font-size: 14px; }
+.lp-tips code, .lp-setup code { background: #f3f0e8; border-radius: 6px; padding: 1px 6px; font-size: 12px; word-break: break-all; }
+.lp-clear { text-align: left; }
+@media (max-width: 1000px) { .lp-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .lp-two { grid-template-columns: 1fr; }
+  .lp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lp-meter { grid-template-columns: 1fr 44px; }
+  .lp-meter-track { grid-column: 1 / -1; grid-row: 2; }
+}

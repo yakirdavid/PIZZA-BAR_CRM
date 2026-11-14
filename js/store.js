@@ -354,6 +354,24 @@ class SupabaseStore {
   async nextNumber(start) {
     return this._check(await this.sb.rpc('pb_next_number', { start_at: start }));
   }
+  // אירועי ביקור מדף הנחיתה (ראו supabase-landing.sql). since: ISO או null לכל התקופה
+  async listLandingEvents(since) {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      let q = this.sb.from('pb_lp_events').select('created_at,visitor,session,type,name,value,data').order('id').range(from, from + 999);
+      if (since) q = q.gte('created_at', since);
+      const { data, error } = await q;
+      if (error) {
+        if (/pb_lp_events|PGRST205|42P01/.test(`${error.code} ${error.message}`)) throw storeError('no-table', error.message);
+        throw new Error(error.message);
+      }
+      out.push(...data);
+      if (data.length < 1000) return out;
+    }
+  }
+  async clearLandingEvents() {
+    this._check(await this.sb.from('pb_lp_events').delete().gte('id', 0));
+  }
   // מעלה את ה-PDF לאחסון (bucket ציבורי quotes, שם קובץ אקראי) ומחזיר קישור לשליחה ללקוח
   async uploadPdf(blob, number) {
     const path = `${this.user.id}/${number}-${uid()}${uid()}.pdf`;

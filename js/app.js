@@ -3,6 +3,7 @@ import { parseRequest } from './parse-request.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
 import { esc, eventTypeLabel, guestsText, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
+import { renderLanding } from './landing-stats.js';
 
 // ---------- עזרים ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -92,6 +93,7 @@ const state = {
   quotes: [],
   dirty: false,
   listFilter: { q: '', status: '', type: '', sort: 'created' },
+  landingRange: '30',
 };
 const images = {}; // ref → url
 
@@ -149,11 +151,23 @@ async function route() {
     }
     if (page === 'customers') return renderCustomers();
     if (page === 'settings') return renderSettings();
+    if (page === 'landing') return showLanding();
     notFound();
   } catch (err) {
     console.error(err);
     toast('שגיאה: ' + err.message, 'error');
   }
+}
+
+function showLanding() {
+  return renderLanding($('#main'), state.store, {
+    range: state.landingRange,
+    toast,
+    onRange: (r) => {
+      state.landingRange = r;
+      showLanding();
+    },
+  });
 }
 
 function notFound() {
