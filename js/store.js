@@ -372,6 +372,10 @@ class SupabaseStore {
   async clearLandingEvents() {
     this._check(await this.sb.from('pb_lp_events').delete().gte('id', 0));
   }
+  // מחיקת ביקור אחד (למשל כניסה של בעלי העסק)
+  async deleteLandingSession(session) {
+    this._check(await this.sb.from('pb_lp_events').delete().eq('session', session));
+  }
   // מעלה את ה-PDF לאחסון (bucket ציבורי quotes, שם קובץ אקראי) ומחזיר קישור לשליחה ללקוח
   async uploadPdf(blob, number) {
     const path = `${this.user.id}/${number}-${uid()}${uid()}.pdf`;

@@ -66,7 +66,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
   for (const e of events) {
     let s = sessions.get(e.session);
     if (!s) {
-      s = { visitor: e.visitor, start: e.created_at, dev: '', src: '', seen: new Set(), deepest: -1, time: 0, scroll: 0, lead: false, contact: false, instagram: false, clicks: 0 };
+      s = { id: e.session, visitor: e.visitor, start: e.created_at, dev: '', src: '', seen: new Set(), deepest: -1, time: 0, scroll: 0, lead: false, contact: false, instagram: false, clicks: 0 };
       sessions.set(e.session, s);
     }
     if (e.created_at < s.start) s.start = e.created_at;
@@ -147,6 +147,19 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
     topExit: topExit && topExit.count ? topExit : null,
     sources: countBy(list, (s) => s.src || 'direct').map(([k, c]) => ({ key: k, label: SOURCE_LABELS[k] || k, count: c, share: pct(c) })),
     clicks: countBy(clickEvents, (k) => k).map(([k, c]) => ({ key: k, label: clickLabel(k), count: c })),
+    // ביקורים אחרונים (החדש קודם), כדי לזהות ולמחוק כניסות של בעלי העסק
+    recent: [...list]
+      .sort((a, b) => (b.start > a.start ? 1 : -1))
+      .slice(0, 30)
+      .map((s) => ({
+        session: s.id,
+        start: s.start,
+        source: SOURCE_LABELS[s.src || 'direct'] || s.src,
+        device: s.dev === 'mobile' ? 'טלפון' : s.dev === 'desktop' ? 'מחשב' : '—',
+        time: s.time,
+        deepest: s.deepest >= 0 ? SECTIONS[s.deepest][1] : '—',
+        outcome: [s.lead && 'טופס', s.contact && 'וואטסאפ / חיוג', s.instagram && 'אינסטגרם'].filter(Boolean).join(', ') || '—',
+      })),
   };
 }
 
@@ -161,6 +174,27 @@ const fmtDay = (k) => {
   const [, m, d] = k.split('-');
   return `${Number(d)}.${Number(m)}`;
 };
+const fmtWhen = (iso) => {
+  const d = new Date(iso);
+  return `${d.getDate()}.${d.getMonth() + 1} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+function recentVisits(rows) {
+  return `<details class="card lp-card lp-recent"><summary><b>ביקורים אחרונים</b> <span class="hint">(נכנסתם בעצמכם? אפשר למחוק את הביקור מכאן)</span></summary>
+    ${table(
+      ['זמן', 'מקור', 'מכשיר', 'זמן בדף', 'הגיעו עד', 'פעולה', ''],
+      rows.map((r) => [
+        fmtWhen(r.start),
+        esc(r.source),
+        r.device,
+        r.time ? fmtTime(r.time) : '—',
+        esc(r.deepest),
+        esc(r.outcome),
+        `<button class="btn small ghost danger" data-del-session="${esc(r.session)}" title="מחיקת הביקור הזה">מחיקה</button>`,
+      ])
+    )}
+  </details>`;
+}
 
 const RANGES = [
   ['7', '7 ימים אחרונים'],
@@ -308,7 +342,7 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
   if (!st.sessions) {
     body.innerHTML = `<div class="empty">
       <p>עדיין אין כניסות בטווח הזה.</p>
-      <p class="hint">הכניסות שלכם לא נספרות אם פתחתם פעם את הדף בכתובת עם <code>?notrack</code> (ראו למטה).</p>
+      <p class="hint">כניסות מדפדפן שמחובר למערכת הזו לא נספרות (ראו למטה).</p>
     </div>${trackingTips()}`;
     return;
   }
@@ -350,12 +384,25 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
       <div class="card lp-card"><h2>על מה לחצו</h2>${table(['כפתור', 'לחיצות'], st.clicks.map((r) => [esc(r.label), fmtInt(r.count)]))}</div>
     </div>
 
+    ${recentVisits(st.recent)}
     ${trackingTips()}
     <p class="lp-clear"><button class="btn small ghost danger" id="lp-clear">מחיקת כל נתוני המדדים</button></p>`;
 
   const wrap = body.querySelector('.lp-daily-wrap');
   wrap.innerHTML = dailyChart(st.daily, wrap.clientWidth);
   bindTips(body);
+  body.querySelectorAll('[data-del-session]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      if (!confirm('למחוק את הביקור הזה מהמדדים?')) return;
+      try {
+        await store.deleteLandingSession(btn.dataset.delSession);
+        toast?.('הביקור נמחק');
+        onRange?.(range);
+      } catch (err) {
+        toast?.('שגיאה במחיקה: ' + err.message, 'error');
+      }
+    })
+  );
   body.querySelector('#lp-clear').addEventListener('click', async () => {
     if (!confirm('למחוק את כל נתוני המדדים של דף הנחיתה? אי אפשר לבטל את זה.')) return;
     try {
@@ -375,7 +422,8 @@ function trackingTips() {
         <br>באינסטגרם: <code dir="ltr">${LANDING_URL}?src=instagram</code>
         <br>בוואטסאפ: <code dir="ltr">${LANDING_URL}?src=whatsapp</code>
         <br>בפייסבוק: <code dir="ltr">${LANDING_URL}?src=facebook</code></li>
-      <li>כדי שהכניסות שלכם לא ייספרו, פתחו פעם אחת בכל מכשיר שלכם את <code dir="ltr">${LANDING_URL}?notrack</code>. כדי לבטל: <code dir="ltr">?track</code>.</li>
+      <li>כניסות לדף הנחיתה מדפדפן שמחובר למערכת הזו לא נספרות, אוטומטית. זה עובד בכל דפדפן שבו נכנסתם למערכת (ספארי, כרום במחשב וכו׳).</li>
+      <li>הדפדפן הפנימי של אינסטגרם, וואטסאפ ופייסבוק הוא דפדפן נפרד שלא יודע שנכנסתם למערכת, ולכן כניסה דרכו כן נספרת. מחקו אותה ברשימה "ביקורים אחרונים". אפשר גם לפתוח פעם אחת בתוך האפליקציה את <code dir="ltr">${LANDING_URL}?notrack</code>.</li>
       <li>הנתונים אנונימיים: לא נשמרים שמות, טלפונים או תוכן הטופס.</li>
     </ul>
   </details>`;

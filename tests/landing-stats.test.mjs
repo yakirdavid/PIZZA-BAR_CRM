@@ -93,6 +93,17 @@ test('instagram clicks are counted per button and are not contacts', () => {
   assert.ok(labels.includes('אינסטגרם: תחתית הדף'));
 });
 
+test('recent visits list each session with its outcome', () => {
+  const st = summarizeLanding(events);
+  assert.equal(st.recent.length, 3);
+  const bySession = Object.fromEntries(st.recent.map((r) => [r.session, r]));
+  assert.equal(bySession.s1aaaaaa.outcome, 'טופס');
+  assert.equal(bySession.s2bbbbbb.outcome, 'וואטסאפ / חיוג, אינסטגרם');
+  assert.equal(bySession.s3cccccc.deepest, 'תפריט');
+  assert.equal(bySession.s3cccccc.source, 'וואטסאפ');
+  assert.equal(bySession.s2bbbbbb.device, 'מחשב');
+});
+
 test('empty input', () => {
   const st = summarizeLanding([], { days: 30 });
   assert.equal(st.sessions, 0);

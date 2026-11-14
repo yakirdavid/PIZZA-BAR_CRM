@@ -1703,6 +1703,11 @@ async function start() {
     busy(false);
     if (!user) return renderLogin();
     document.body.classList.remove('logged-out');
+    // דף הנחיתה נמצא באותו אתר (yakirdavid.github.io) ולכן חולק את האחסון:
+    // דפדפן שמחובר למערכת הוא של בעלי העסק, וכניסות ממנו לדף הנחיתה לא נספרות במדדים
+    try {
+      localStorage.setItem('pb_notrack', '1');
+    } catch {}
     busy(true, 'טוען נתונים...');
     try {
       await loadData();
