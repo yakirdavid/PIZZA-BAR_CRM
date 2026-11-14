@@ -159,13 +159,22 @@ async function route() {
   }
 }
 
-function showLanding() {
+function showLanding({ recentOpen = false } = {}) {
   return renderLanding($('#main'), state.store, {
     range: state.landingRange,
     toast,
+    recentOpen,
     onRange: (r) => {
       state.landingRange = r;
       showLanding();
+    },
+    // המכשירים של בעלי העסק נשמרים בהגדרות (בענן), כך שהסימון לא תלוי בדפדפן
+    ownDevices: state.settings.lpOwnDevices || [],
+    onOwnDevices: async (list) => {
+      const next = { ...state.settings, lpOwnDevices: list };
+      await state.store.saveSettings(next);
+      state.settings = next;
+      showLanding({ recentOpen: true });
     },
   });
 }

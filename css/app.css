@@ -338,6 +338,8 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .lp-tips ul { line-height: 1.9; padding-right: 20px; margin: 10px 0 0; font-size: 14px; }
 .lp-tips code, .lp-setup code { background: #f3f0e8; border-radius: 6px; padding: 1px 6px; font-size: 12px; word-break: break-all; }
 .lp-clear { text-align: left; }
+.lp-row-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.lp-own { margin: 10px 0; }
 @media (max-width: 760px) {
   .lp-two { grid-template-columns: 1fr; }
   .lp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }

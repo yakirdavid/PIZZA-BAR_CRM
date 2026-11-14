@@ -60,10 +60,15 @@ const countBy = (items, key) => {
 };
 
 // events: שורות מהטבלה. days: מספר הימים בטווח (לגרף היומי), או null לכל התקופה
-export function summarizeLanding(events, { days = null, now = new Date() } = {}) {
+// exclude: מזהי מבקר של המכשירים של בעלי העסק – הביקורים שלהם לא נספרים
+export function summarizeLanding(events, { days = null, now = new Date(), exclude = [] } = {}) {
   const sessions = new Map();
   const clickEvents = [];
+  const own = new Set(exclude);
+  // ביקור שאחד מהאירועים שלו מגיע ממכשיר של בעלי העסק – לא נספר כולו
+  const ownSessions = new Set(events.filter((e) => own.has(e.visitor)).map((e) => e.session));
   for (const e of events) {
+    if (ownSessions.has(e.session)) continue;
     let s = sessions.get(e.session);
     if (!s) {
       s = { id: e.session, visitor: e.visitor, start: e.created_at, dev: '', src: '', seen: new Set(), deepest: -1, time: 0, scroll: 0, lead: false, contact: false, instagram: false, clicks: 0 };
@@ -153,6 +158,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
       .slice(0, 30)
       .map((s) => ({
         session: s.id,
+        visitor: s.visitor,
         start: s.start,
         source: SOURCE_LABELS[s.src || 'direct'] || s.src,
         device: s.dev === 'mobile' ? 'טלפון' : s.dev === 'desktop' ? 'מחשב' : '—',
@@ -160,6 +166,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
         deepest: s.deepest >= 0 ? SECTIONS[s.deepest][1] : '—',
         outcome: [s.lead && 'טופס', s.contact && 'וואטסאפ / חיוג', s.instagram && 'אינסטגרם'].filter(Boolean).join(', ') || '—',
       })),
+    ownVisits: ownSessions.size,
   };
 }
 
@@ -179,8 +186,11 @@ const fmtWhen = (iso) => {
   return `${d.getDate()}.${d.getMonth() + 1} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-function recentVisits(rows) {
-  return `<details class="card lp-card lp-recent"><summary><b>ביקורים אחרונים</b> <span class="hint">(נכנסתם בעצמכם? אפשר למחוק את הביקור מכאן)</span></summary>
+function recentVisits(rows, { ownDevices = 0, ownVisits = 0, open = false } = {}) {
+  return `<details class="card lp-card lp-recent" ${open ? 'open' : ''}><summary><b>ביקורים אחרונים</b> <span class="hint">(נכנסתם בעצמכם? לחצו "זה אני")</span></summary>
+    <p class="hint lp-own">"זה אני" מסמן את המכשיר שממנו נכנסתם, וכל הביקורים ממנו, מהעבר ומהעתיד, לא נספרים.
+      ${ownDevices ? `${ownDevices === 1 ? 'מסומן כרגע מכשיר אחד שלכם' : `מסומנים כרגע ${fmtInt(ownDevices)} מכשירים שלכם`}${ownVisits ? `, ו־${ownVisits === 1 ? 'ביקור אחד ממנו לא נספר' : `${fmtInt(ownVisits)} ביקורים מהם לא נספרים`} בטווח הזה` : ''}. <button class="btn small ghost" id="lp-own-reset">ביטול הסימון</button>` : ''}
+    </p>
     ${table(
       ['זמן', 'מקור', 'מכשיר', 'זמן בדף', 'הגיעו עד', 'פעולה', ''],
       rows.map((r) => [
@@ -190,7 +200,7 @@ function recentVisits(rows) {
         r.time ? fmtTime(r.time) : '—',
         esc(r.deepest),
         esc(r.outcome),
-        `<button class="btn small ghost danger" data-del-session="${esc(r.session)}" title="מחיקת הביקור הזה">מחיקה</button>`,
+        `<span class="lp-row-actions"><button class="btn small" data-me-visitor="${esc(r.visitor)}" title="המכשיר הזה שלי – לא לספור אותו">זה אני</button><button class="btn small ghost danger" data-del-session="${esc(r.session)}" title="מחיקת הביקור הזה">מחיקה</button></span>`,
       ])
     )}
   </details>`;
@@ -312,7 +322,8 @@ function bindTips(root) {
   root.addEventListener('focusout', () => (tip.hidden = true));
 }
 
-export async function renderLanding(main, store, { range = '30', onRange, toast } = {}) {
+// ownDevices: מזהי המכשירים של בעלי העסק (נשמרים בהגדרות). onOwnDevices(list): שמירת רשימה חדשה
+export async function renderLanding(main, store, { range = '30', onRange, toast, ownDevices = [], onOwnDevices, recentOpen = false } = {}) {
   main.innerHTML = `
     <div class="page-head">
       <h1>מדדי דף הנחיתה</h1>
@@ -337,13 +348,29 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
     body.innerHTML = err.code === 'no-table' ? setupHelp() : `<div class="empty"><p>שגיאה בטעינת המדדים: ${esc(err.message)}</p></div>`;
     return;
   }
-  const st = summarizeLanding(events, { days });
+  const st = summarizeLanding(events, { days, exclude: ownDevices });
+
+  // שמירת רשימת המכשירים של בעלי העסק בהגדרות, ורענון המסך
+  const saveOwn = async (list, done) => {
+    try {
+      await onOwnDevices?.(list);
+      toast?.(done);
+    } catch (err) {
+      toast?.('שגיאה בשמירה: ' + err.message, 'error');
+    }
+  };
+  const bindOwnReset = () =>
+    body.querySelector('#lp-own-reset')?.addEventListener('click', () => {
+      if (confirm('לבטל את סימון המכשירים שלכם? הביקורים מהם ייספרו שוב.')) saveOwn([], 'סימון המכשירים בוטל');
+    });
 
   if (!st.sessions) {
     body.innerHTML = `<div class="empty">
       <p>עדיין אין כניסות בטווח הזה.</p>
-      <p class="hint">כניסות מדפדפן שמחובר למערכת הזו לא נספרות (ראו למטה).</p>
+      <p class="hint">כניסות מדפדפן שמחובר למערכת הזו, ומהמכשירים שסימנתם "זה אני", לא נספרות.</p>
+      ${st.ownVisits ? `<p class="hint">${fmtInt(st.ownVisits)} ביקורים מהמכשירים שלכם הוסתרו. <button class="btn small ghost" id="lp-own-reset">ביטול הסימון</button></p>` : ''}
     </div>${trackingTips()}`;
+    bindOwnReset();
     return;
   }
 
@@ -384,13 +411,21 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
       <div class="card lp-card"><h2>על מה לחצו</h2>${table(['כפתור', 'לחיצות'], st.clicks.map((r) => [esc(r.label), fmtInt(r.count)]))}</div>
     </div>
 
-    ${recentVisits(st.recent)}
+    ${recentVisits(st.recent, { ownDevices: ownDevices.length, ownVisits: st.ownVisits, open: recentOpen })}
     ${trackingTips()}
     <p class="lp-clear"><button class="btn small ghost danger" id="lp-clear">מחיקת כל נתוני המדדים</button></p>`;
 
   const wrap = body.querySelector('.lp-daily-wrap');
   wrap.innerHTML = dailyChart(st.daily, wrap.clientWidth);
   bindTips(body);
+  bindOwnReset();
+  body.querySelectorAll('[data-me-visitor]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.meVisitor;
+      if (!confirm('לסמן את המכשיר שממנו היה הביקור הזה כשלכם? כל הביקורים ממנו, מהעבר ומהעתיד, לא ייספרו במדדים.')) return;
+      saveOwn([...new Set([...ownDevices, id])], 'המכשיר סומן כשלכם ולא ייספר');
+    })
+  );
   const remove = async (run, done) => {
     try {
       await run();
@@ -439,7 +474,7 @@ function trackingTips() {
         <br>בוואטסאפ: <code dir="ltr">${LANDING_URL}?src=whatsapp</code>
         <br>בפייסבוק: <code dir="ltr">${LANDING_URL}?src=facebook</code></li>
       <li>כניסות לדף הנחיתה מדפדפן שמחובר למערכת הזו לא נספרות, אוטומטית. זה עובד בכל דפדפן שבו נכנסתם למערכת (ספארי, כרום במחשב וכו׳).</li>
-      <li>הדפדפן הפנימי של אינסטגרם, וואטסאפ ופייסבוק הוא דפדפן נפרד שלא יודע שנכנסתם למערכת, ולכן כניסה דרכו כן נספרת. מחקו אותה ברשימה "ביקורים אחרונים". אפשר גם לפתוח פעם אחת בתוך האפליקציה את <code dir="ltr">${LANDING_URL}?notrack</code>.</li>
+      <li>אייקון במסך הבית של האייפון, והדפדפן הפנימי של אינסטגרם, וואטסאפ ופייסבוק, הם כל אחד "דפדפן" נפרד שלא יודע שנכנסתם למערכת. אחרי כניסה ראשונה מכל אחד מהם, מצאו את הביקור ברשימה "ביקורים אחרונים" ולחצו <b>"זה אני"</b>. מאז הכניסות ממנו לא נספרות, גם אלה שכבר היו.</li>
       <li>הנתונים אנונימיים: לא נשמרים שמות, טלפונים או תוכן הטופס.</li>
     </ul>
   </details>`;

@@ -104,6 +104,16 @@ test('recent visits list each session with its outcome', () => {
   assert.equal(bySession.s2bbbbbb.device, 'מחשב');
 });
 
+test('owner devices are excluded, past and future', () => {
+  // v-s1aaaaaa הוא המבקר של s1 ושל s2
+  const st = summarizeLanding(events, { exclude: ['v-s1aaaaaa'] });
+  assert.equal(st.sessions, 1);
+  assert.equal(st.ownVisits, 2);
+  assert.equal(st.leads, 0);
+  assert.equal(st.recent[0].session, 's3cccccc');
+  assert.equal(st.recent[0].visitor, 'v-s3cccccc');
+});
+
 test('empty input', () => {
   const st = summarizeLanding([], { days: 30 });
   assert.equal(st.sessions, 0);
