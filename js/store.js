@@ -369,12 +369,19 @@ class SupabaseStore {
       if (data.length < 1000) return out;
     }
   }
+  // Supabase לא מחזיר שגיאה כשחוק אבטחה חוסם מחיקה – פשוט לא נמחק כלום.
+  // לכן מבקשים את השורות שנמחקו ובודקים שבאמת נמחקו.
+  async _deleteLanding(filter) {
+    const deleted = this._check(await filter(this.sb.from('pb_lp_events').delete()).select('id'));
+    if (!deleted.length) throw storeError('not-deleted', 'המחיקה נחסמה במסד הנתונים');
+    return deleted.length;
+  }
   async clearLandingEvents() {
-    this._check(await this.sb.from('pb_lp_events').delete().gte('id', 0));
+    return this._deleteLanding((q) => q.gte('id', 0));
   }
   // מחיקת ביקור אחד (למשל כניסה של בעלי העסק)
   async deleteLandingSession(session) {
-    this._check(await this.sb.from('pb_lp_events').delete().eq('session', session));
+    return this._deleteLanding((q) => q.eq('session', session));
   }
   // מעלה את ה-PDF לאחסון (bucket ציבורי quotes, שם קובץ אקראי) ומחזיר קישור לשליחה ללקוח
   async uploadPdf(blob, number) {

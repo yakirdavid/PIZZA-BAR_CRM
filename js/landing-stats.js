@@ -391,28 +391,44 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
   const wrap = body.querySelector('.lp-daily-wrap');
   wrap.innerHTML = dailyChart(st.daily, wrap.clientWidth);
   bindTips(body);
-  body.querySelectorAll('[data-del-session]').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      if (!confirm('למחוק את הביקור הזה מהמדדים?')) return;
-      try {
-        await store.deleteLandingSession(btn.dataset.delSession);
-        toast?.('הביקור נמחק');
-        onRange?.(range);
-      } catch (err) {
-        toast?.('שגיאה במחיקה: ' + err.message, 'error');
-      }
-    })
-  );
-  body.querySelector('#lp-clear').addEventListener('click', async () => {
-    if (!confirm('למחוק את כל נתוני המדדים של דף הנחיתה? אי אפשר לבטל את זה.')) return;
+  const remove = async (run, done) => {
     try {
-      await store.clearLandingEvents();
-      toast?.('נתוני המדדים נמחקו');
+      await run();
+      toast?.(done);
       onRange?.(range);
     } catch (err) {
-      toast?.('שגיאה במחיקה: ' + err.message, 'error');
+      if (err.code === 'not-deleted') {
+        body.insertAdjacentHTML('afterbegin', deleteHelp());
+        body.querySelector('.lp-setup')?.scrollIntoView({ behavior: 'smooth' });
+        toast?.('המחיקה לא בוצעה: חסרה הרשאת מחיקה ב-Supabase', 'error');
+      } else toast?.('שגיאה במחיקה: ' + err.message, 'error');
     }
+  };
+  body.querySelectorAll('[data-del-session]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      if (confirm('למחוק את הביקור הזה מהמדדים?')) remove(() => store.deleteLandingSession(btn.dataset.delSession), 'הביקור נמחק');
+    })
+  );
+  body.querySelector('#lp-clear').addEventListener('click', () => {
+    if (confirm('למחוק את כל נתוני המדדים של דף הנחיתה? אי אפשר לבטל את זה.')) remove(() => store.clearLandingEvents(), 'נתוני המדדים נמחקו');
   });
+}
+
+// המחיקה נחסמה: בדרך כלל כי החלק האחרון של supabase-landing.sql לא רץ
+function deleteHelp() {
+  if (document.querySelector('.lp-setup')) return '';
+  return `<div class="card lp-card lp-setup">
+    <h2>המחיקה לא בוצעה</h2>
+    <p>למסד הנתונים חסרה הרשאת מחיקה לטבלת המדדים. כדי לתקן (פעם אחת):</p>
+    <ol>
+      <li>ב-Supabase נכנסים ל-<b>SQL Editor → New query</b>.</li>
+      <li>מדביקים את שלוש השורות האלה ולוחצים <b>Run</b>:
+        <pre dir="ltr">drop policy if exists "owner deletes" on public.pb_lp_events;
+create policy "owner deletes" on public.pb_lp_events for delete to authenticated using (true);
+grant select, insert, delete on public.pb_lp_events to authenticated;</pre></li>
+      <li>חוזרים לכאן ומוחקים שוב.</li>
+    </ol>
+  </div>`;
 }
 
 function trackingTips() {

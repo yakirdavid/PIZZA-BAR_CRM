@@ -333,6 +333,7 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .lp-table td:not(:first-child), .lp-table th:not(:first-child) { font-variant-numeric: tabular-nums; }
 .lp-tip { position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: #fff; font-size: 13px; padding: 6px 10px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.2); white-space: nowrap; }
 .lp-setup ol { line-height: 1.9; padding-right: 20px; }
+.lp-setup pre { background: #f3f0e8; border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; text-align: left; margin: 6px 0 0; }
 .lp-tips summary { cursor: pointer; color: var(--green); }
 .lp-tips ul { line-height: 1.9; padding-right: 20px; margin: 10px 0 0; font-size: 14px; }
 .lp-tips code, .lp-setup code { background: #f3f0e8; border-radius: 6px; padding: 1px 6px; font-size: 12px; word-break: break-all; }
