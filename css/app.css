@@ -305,7 +305,7 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
   --lp-hot: #c4572c;       /* הדגשה: הנקודה שבה הכי הרבה עוזבים (תמיד עם טקסט) */
   --lp-grid: #ece7df;
 }
-.lp-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.lp-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .lp-tile { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
 .lp-tile-label { font-size: 13px; color: var(--muted); }
 .lp-tile b { font-size: 26px; color: var(--green); font-weight: 700; line-height: 1.2; }
@@ -337,7 +337,6 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .lp-tips ul { line-height: 1.9; padding-right: 20px; margin: 10px 0 0; font-size: 14px; }
 .lp-tips code, .lp-setup code { background: #f3f0e8; border-radius: 6px; padding: 1px 6px; font-size: 12px; word-break: break-all; }
 .lp-clear { text-align: left; }
-@media (max-width: 1000px) { .lp-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   .lp-two { grid-template-columns: 1fr; }
   .lp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }

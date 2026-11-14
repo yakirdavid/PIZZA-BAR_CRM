@@ -23,6 +23,9 @@ const CLICK_LABELS = {
   whatsapp: 'וואטסאפ',
   phone: 'חיוג',
   instagram: 'אינסטגרם',
+  'instagram:about': 'אינסטגרם: "עוד תמונות" (מי אנחנו)',
+  'instagram:quote': 'אינסטגרם: ליד הטופס',
+  'instagram:footer': 'אינסטגרם: תחתית הדף',
   'cta:quote': 'כפתור בדיקת זמינות',
   'cta:menu': 'כפתור לתפריט',
   'tab:pizza': 'לשונית פיצות',
@@ -33,6 +36,7 @@ const clickLabel = (n) =>
   CLICK_LABELS[n] || (n.startsWith('package:') ? `בחירת מסלול: ${n.slice(8)}` : n.startsWith('nav:') ? `תפריט עליון: ${sectionLabel(n.slice(4))}` : n);
 
 const CONTACT_CLICKS = new Set(['whatsapp', 'phone']);
+const isInstagram = (name) => name === 'instagram' || String(name).startsWith('instagram:');
 const MAX_TIME = 30 * 60 * 1000; // ביקור ארוך מזה (טאב שנשכח פתוח) נספר כ-30 דקות
 const QUICK_EXIT = 10 * 1000;
 
@@ -62,7 +66,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
   for (const e of events) {
     let s = sessions.get(e.session);
     if (!s) {
-      s = { visitor: e.visitor, start: e.created_at, dev: '', src: '', seen: new Set(), deepest: -1, time: 0, scroll: 0, lead: false, contact: false, clicks: 0 };
+      s = { visitor: e.visitor, start: e.created_at, dev: '', src: '', seen: new Set(), deepest: -1, time: 0, scroll: 0, lead: false, contact: false, instagram: false, clicks: 0 };
       sessions.set(e.session, s);
     }
     if (e.created_at < s.start) s.start = e.created_at;
@@ -80,6 +84,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
       s.clicks++;
       clickEvents.push(e.name || '');
       if (CONTACT_CLICKS.has(e.name)) s.contact = true;
+      if (isInstagram(e.name)) s.instagram = true;
     } else if (e.type === 'lead') {
       s.lead = true;
     }
@@ -92,6 +97,7 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
   const leads = list.filter((s) => s.lead).length;
   const contacts = list.filter((s) => s.contact).length;
   const engaged = list.filter((s) => s.lead || s.contact).length;
+  const instagram = list.filter((s) => s.instagram).length;
   const quick = list.filter((s) => s.time > 0 && s.time < QUICK_EXIT && !s.clicks && !s.lead).length;
 
   // גרף יומי: כל יום בטווח, גם ימים בלי כניסות
@@ -126,6 +132,9 @@ export function summarizeLanding(events, { days = null, now = new Date() } = {})
     contactRate: pct(contacts),
     engaged,
     engagedRate: pct(engaged),
+    instagram,
+    instagramRate: pct(instagram),
+    instagramClicks: clickEvents.filter(isInstagram).length,
     avgTime: timed.length ? timed.reduce((a, b) => a + b, 0) / timed.length : 0,
     medianTime: median(timed),
     quickRate: pct(quick, timed.length),
@@ -310,6 +319,7 @@ export async function renderLanding(main, store, { range = '30', onRange, toast 
       ${tile('פניות', fmtInt(st.engaged), `${fmtPct(st.engagedRate)} מהכניסות`)}
       ${tile('שלחו טופס', fmtInt(st.leads), `${fmtPct(st.leadRate)} מהכניסות`)}
       ${tile('לחצו וואטסאפ / חיוג', fmtInt(st.contacts), `${fmtPct(st.contactRate)} מהכניסות`)}
+      ${tile('עברו לאינסטגרם', fmtInt(st.instagram), `${fmtPct(st.instagramRate)} מהכניסות · ${fmtInt(st.instagramClicks)} לחיצות`)}
       ${tile('זמן ממוצע בדף', fmtTime(st.avgTime), `חציון ${fmtTime(st.medianTime)}`)}
       ${tile('יצאו תוך 10 שניות', fmtPct(st.quickRate), `גלילה ממוצעת ${fmtPct(st.avgScroll / 100)}`)}
     </div>

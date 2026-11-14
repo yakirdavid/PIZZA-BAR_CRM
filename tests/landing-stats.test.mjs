@@ -26,6 +26,8 @@ const events = [
   ev('s2bbbbbb', 'view', null, null, { dev: 'desktop' }, 'v-s1aaaaaa'),
   ev('s2bbbbbb', 'section', 'hero'),
   ev('s2bbbbbb', 'click', 'whatsapp'),
+  ev('s2bbbbbb', 'click', 'instagram:about'),
+  ev('s2bbbbbb', 'click', 'instagram:footer'),
   ev('s2bbbbbb', 'leave', null, 30000, { scroll: 10 }),
 
   ev('s3cccccc', 'view', null, null, { dev: 'mobile', src: 'whatsapp' }),
@@ -79,6 +81,16 @@ test('daily series covers every day in the range, including empty days', () => {
   const st = summarizeLanding(events, { days: 7, now: new Date(2026, 10, 12, 12) });
   assert.equal(st.daily.length, 7);
   assert.equal(st.daily.reduce((a, d) => a + d.sessions, 0), 3);
+});
+
+test('instagram clicks are counted per button and are not contacts', () => {
+  const st = summarizeLanding(events);
+  assert.equal(st.instagram, 1); // ביקור אחד לחץ פעמיים
+  assert.equal(st.instagramClicks, 2);
+  assert.equal(st.contacts, 1);
+  const labels = st.clicks.map((c) => c.label);
+  assert.ok(labels.includes('אינסטגרם: "עוד תמונות" (מי אנחנו)'));
+  assert.ok(labels.includes('אינסטגרם: תחתית הדף'));
 });
 
 test('empty input', () => {
