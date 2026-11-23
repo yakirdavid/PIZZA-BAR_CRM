@@ -157,6 +157,8 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .row-item .field { width: 130px; }
 .row-item .field.grow { flex: 1; min-width: 180px; }
 .row-item .icon { margin-bottom: 3px; }
+.feat-pkg { display: flex; gap: 10px; align-items: flex-end; width: 100%; flex-wrap: wrap; padding-inline-start: 14px; border-inline-start: 3px solid #e7ddd0; }
+.feat-pkg .field { width: 150px; }
 .add-row { width: 100%; }
 .add-row select { width: auto; max-width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -82,6 +82,17 @@ export function guestsText(q) {
   return parts.join(' + ');
 }
 
+// כרטיסי "מה כוללת החוויה" לפי המסלול: לכל כרטיס אפשר להגדיר במסלול מסוים טקסט אחר או הסתרה.
+// byPkg: { [packageId]: { mode: 'same' | 'custom' | 'hide', text } }
+export function featuresFor(features, packageId) {
+  return (features || []).flatMap((f) => {
+    const o = f.byPkg?.[packageId];
+    if (o?.mode === 'hide') return [];
+    if (o?.mode === 'custom' && String(o.text || '').trim()) return [{ title: f.title, text: o.text }];
+    return [{ title: f.title, text: f.text }];
+  });
+}
+
 // מחזיר רשימת בלוקים לפי סדר – כל בלוק נשאר שלם בעמוד אחד
 export function buildBlocks(q, images) {
   const s = q.brand; // עותק ההגדרות שנשמר עם ההצעה
@@ -112,11 +123,12 @@ export function buildBlocks(q, images) {
 
   if (s.business.intro) add(`<p class="q-intro">${esc(s.business.intro)}</p>`);
 
-  if (s.features?.length) {
+  const features = featuresFor(s.features, q.packageId);
+  if (features.length) {
     add(`
       <h2 class="q-h2">מה כוללת החוויה?</h2>
       <div class="q-features">
-        ${s.features.map((f) => `<div class="q-card"><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p></div>`).join('')}
+        ${features.map((f) => `<div class="q-card"><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p></div>`).join('')}
       </div>`);
   }
 

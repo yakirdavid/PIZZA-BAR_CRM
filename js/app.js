@@ -1464,12 +1464,26 @@ async function renderSettings() {
       ),
       sec(
         '"מה כוללת החוויה" – כרטיסי שירות',
-        `<div class="rows">${s.features
+        `<p class="hint">לכל כרטיס אפשר לקבוע מה יודפס בכל מסלול: הטקסט הרגיל, טקסט אחר (למשל בלי ראשונות וסלטים במסלול פיצות בלבד), או לא להציג אותו בכלל.</p>
+        <div class="rows">${s.features
           .map(
             (f, i) => `<div class="row-item">
             ${field('כותרת', `features.${i}.title`, s)}
             ${field('טקסט', `features.${i}.text`, s, { cls: 'grow' })}
             <button type="button" class="icon danger" data-del-feature="${i}" title="הסרה">✕</button>
+            ${s.packages
+              .map(
+                (p) => `<div class="feat-pkg">
+                  ${field(`במסלול ${p.name}`, `features.${i}.byPkg.${p.id}.mode`, s, {
+                    options: [['same', 'הטקסט הרגיל'], ['custom', 'טקסט אחר'], ['hide', 'לא להציג']],
+                  })}
+                  ${field(`טקסט אחר למסלול ${p.name}`, `features.${i}.byPkg.${p.id}.text`, s, {
+                    cls: 'grow',
+                    placeholder: 'מודפס רק כשנבחר "טקסט אחר"',
+                  })}
+                </div>`
+              )
+              .join('')}
           </div>`
           )
           .join('')}

@@ -101,3 +101,16 @@ test('pizza count placeholder', () => {
   const c = calcQuote(base({ guests: { adults: 15 }, pizzaCount: 5 }));
   assert.equal(fillTerms('בחירת {מספר_פיצות} סוגי פיצות', c), 'בחירת 5 סוגי פיצות');
 });
+
+import { featuresFor } from '../js/quote-render.js';
+test('features can change text or hide per package', () => {
+  const f = [
+    { title: 'הגשה', text: 'ראשונות, סלטים ופיצות', byPkg: { pizza: { mode: 'custom', text: 'פיצות חמות' } } },
+    { title: 'סלטים', text: 'מגוון סלטים', byPkg: { pizza: { mode: 'hide' } } },
+    { title: 'צוות', text: 'צוות מנוסה' },
+  ];
+  assert.deepEqual(featuresFor(f, 'full').map((x) => x.text), ['ראשונות, סלטים ופיצות', 'מגוון סלטים', 'צוות מנוסה']);
+  assert.deepEqual(featuresFor(f, 'pizza').map((x) => x.text), ['פיצות חמות', 'צוות מנוסה']);
+  // טקסט אחר ריק – נשאר הטקסט הרגיל
+  assert.equal(featuresFor([{ title: 'a', text: 'רגיל', byPkg: { x: { mode: 'custom', text: ' ' } } }], 'x')[0].text, 'רגיל');
+});
