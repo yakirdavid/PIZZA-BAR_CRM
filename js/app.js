@@ -361,7 +361,7 @@ function renderList() {
     if (e.target.dataset.act !== 'status') return;
     const q = state.quotes.find((x) => x.id === e.target.closest('tr').dataset.id);
     await setStatus(q, e.target.value);
-    renderList();
+    renderList(); // גם אם הביטול לא נשמר – מחזיר את הבחירה לסטטוס הקודם
   });
   $('#list-body').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-act]');
@@ -382,10 +382,62 @@ async function persist(q) {
   else state.quotes.push(q);
 }
 
+// מעבר לסטטוס "בוטלה" מחייב סיבת ביטול. מחזיר false אם השינוי לא נשמר.
 async function setStatus(q, status) {
+  let reason = q.cancelReason;
+  if (status === 'cancelled') {
+    reason = await askCancelReason(q);
+    if (reason == null) return false;
+  }
   q.status = status;
+  if (status === 'cancelled') q.cancelReason = reason;
+  else delete q.cancelReason;
   await persist(q);
   toast(`הסטטוס עודכן: ${statusLabel(status)}`);
+  return true;
+}
+
+// חלון חובה להזנת סיבת ביטול. מחזיר את הסיבה, או null אם המשתמש סגר בלי לשמור.
+function askCancelReason(q) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-back';
+    back.innerHTML = `
+      <div class="modal card" role="dialog" aria-label="סיבת ביטול">
+        <div class="modal-head"><h2>ביטול הצעה ${esc(q.number || '')}</h2><button class="icon" data-x title="סגירה">✕</button></div>
+        <label class="field"><span>סיבת ביטול *</span><textarea id="cancel-reason" rows="4" required placeholder="למשל: הלקוח בחר ספק אחר">${esc(q.cancelReason || '')}</textarea>
+          <small id="cancel-hint">שדה חובה. אי אפשר לשמור את הביטול בלי סיבה.</small></label>
+        <div class="wa-actions">
+          <button class="btn primary" id="cancel-ok">שמירת הביטול</button>
+          <button class="btn ghost" data-x>חזרה בלי לשנות</button>
+        </div>
+      </div>`;
+    document.body.append(back);
+    const ta = $('#cancel-reason', back);
+    const done = (v) => {
+      back.remove();
+      resolve(v);
+    };
+    back.addEventListener('click', (e) => {
+      if (e.target === back || e.target.closest('[data-x]')) done(null);
+    });
+    ta.addEventListener('input', () => {
+      ta.classList.remove('invalid');
+      $('#cancel-hint', back).classList.remove('err');
+    });
+    $('#cancel-ok', back).addEventListener('click', () => {
+      const v = ta.value.trim();
+      if (!v) {
+        ta.classList.add('invalid');
+        $('#cancel-hint', back).classList.add('err');
+        toast('יש להזין סיבת ביטול', 'error');
+        ta.focus();
+        return;
+      }
+      done(v);
+    });
+    ta.focus();
+  });
 }
 
 function duplicateQuote(q) {
@@ -399,6 +451,7 @@ function duplicateQuote(q) {
     quoteDate: today(),
     generated: [],
   });
+  delete d.cancelReason;
   state.pendingDraft = d;
   go('#/edit/draft');
 }
@@ -693,7 +746,8 @@ function renderEditor(q) {
       <h2>פרטי ההצעה</h2>
       <div class="grid">
         ${field('תאריך ההצעה', 'quoteDate', q, { type: 'date' })}
-        ${field('סטטוס', 'status', q, { options: STATUSES.map((x) => [x.id, x.label]) })}
+        ${field('סטטוס', 'status', q, { options: STATUSES.map((x) => [x.id, x.label]), rerender: true })}
+        ${q.status === 'cancelled' ? field('סיבת ביטול', 'cancelReason', q, { type: 'textarea', required: true, cls: 'span2', hint: '<span id="cancel-hint">שדה חובה כשההצעה מבוטלת</span>' }) : ''}
       </div>`,
 
     () => {
@@ -887,6 +941,11 @@ function renderEditor(q) {
       ph.classList.toggle('invalid', bad);
       $('#phone-hint')?.classList.toggle('err', bad);
     }
+    const cr = $('#f_cancelReason');
+    if (cr && cr.value.trim()) {
+      cr.classList.remove('invalid');
+      $('#cancel-hint')?.classList.remove('err');
+    }
   };
 
   const drawStep = () => {
@@ -997,6 +1056,17 @@ function renderEditor(q) {
       $('#f_customer_phone')?.focus();
       return;
     }
+    if (q.status === 'cancelled' && !String(q.cancelReason || '').trim()) {
+      step = 0;
+      drawStep();
+      toast('יש להזין סיבת ביטול', 'error');
+      $('#f_cancelReason')?.classList.add('invalid');
+      $('#cancel-hint')?.classList.add('err');
+      $('#f_cancelReason')?.focus();
+      return;
+    }
+    if (q.status === 'cancelled') q.cancelReason = q.cancelReason.trim();
+    else delete q.cancelReason;
     busy(true, 'שומר...');
     try {
       if (!q.number) q.number = await state.store.nextNumber(Number(s.numbering.start) || 1);
@@ -1136,6 +1206,7 @@ async function renderView(q) {
         <div class="sum-row muted"><span>🔒 עלות פנימית</span><b>${formatILS(c.internal.cost)}</b></div>
         <div class="sum-row muted"><span>🔒 עמלה</span><b>${formatILS(c.internal.commission)}</b></div>
         <div class="sum-row muted"><span>🔒 רווח משוער</span><b>${formatILS(c.internal.profit)}</b></div>
+        <div class="internal-notes" id="v-cancel-reason" ${q.status === 'cancelled' ? '' : 'hidden'}><b>סיבת ביטול:</b><br><span>${esc(q.cancelReason || '')}</span></div>
         ${q.internalNotes ? `<div class="internal-notes"><b>הערות פנימיות:</b><br>${esc(q.internalNotes).replace(/\n/g, '<br>')}</div>` : ''}
         <div id="copies-box">${copiesHtml(q)}</div>
       </aside>
@@ -1156,7 +1227,13 @@ async function renderView(q) {
 
   $('#v-status').addEventListener('change', async (e) => {
     await setStatus(q, e.target.value);
+    e.target.value = q.status;
     e.target.className = `status-select badge ${q.status}`;
+    const cr = $('#v-cancel-reason');
+    if (cr) {
+      cr.hidden = q.status !== 'cancelled';
+      $('span', cr).textContent = q.cancelReason || '';
+    }
   });
   $('#v-dup').addEventListener('click', () => duplicateQuote(q));
   $('#v-del').addEventListener('click', () => deleteQuote(q));
