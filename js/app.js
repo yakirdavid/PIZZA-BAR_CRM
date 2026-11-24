@@ -268,7 +268,9 @@ function quoteMatches(q, f) {
 function sortQuotes(list, sort) {
   const by = {
     created: (a, b) => (b.number || 0) - (a.number || 0),
+    // הצעות בלי תאריך אירוע תמיד בסוף, בשני הכיוונים
     event: (a, b) => (eventDateKey(a) || '9999').localeCompare(eventDateKey(b) || '9999'),
+    eventDesc: (a, b) => (eventDateKey(b) || '0000').localeCompare(eventDateKey(a) || '0000'),
     total: (a, b) => calcQuote(b).total - calcQuote(a).total,
   }[sort];
   return [...list].sort(by);
@@ -301,7 +303,8 @@ function renderList() {
       <select id="flt-type"><option value="">כל סוגי האירועים</option>${s.eventTypes.map((t) => `<option ${f.type === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
       <select id="flt-sort">
         <option value="created" ${f.sort === 'created' ? 'selected' : ''}>מיון: חדשות קודם</option>
-        <option value="event" ${f.sort === 'event' ? 'selected' : ''}>מיון: תאריך אירוע</option>
+        <option value="event" ${f.sort === 'event' ? 'selected' : ''}>מיון: תאריך אירוע – מהקרוב לרחוק</option>
+        <option value="eventDesc" ${f.sort === 'eventDesc' ? 'selected' : ''}>מיון: תאריך אירוע – מהרחוק לקרוב</option>
         <option value="total" ${f.sort === 'total' ? 'selected' : ''}>מיון: סכום</option>
       </select>
     </div>
