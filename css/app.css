@@ -382,3 +382,4 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .steps-list { margin: 0 0 10px; padding-inline-start: 20px; }
 .steps-list li { margin-bottom: 4px; }
 #v-order { display: contents; }
+.icon.form-ready { background: #e2f3e6; border-radius: 8px; }

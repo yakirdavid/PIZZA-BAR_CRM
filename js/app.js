@@ -161,7 +161,10 @@ async function route() {
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === navPage));
   window.scrollTo(0, 0);
   try {
-    if (!page || page === 'list') return renderList();
+    if (!page || page === 'list') {
+      await loadForms();
+      return renderList();
+    }
     if (page === 'new') return renderEditor(newQuote(id ? decodeURIComponent(id) : null));
     if (page === 'edit' && id === 'draft') return renderEditor(null);
     if (page === 'edit') {
@@ -378,7 +381,7 @@ function renderList() {
                   <button class="icon" data-act="dup" title="שכפול">⧉</button>
                   <button class="icon" data-act="pdf" title="הורדת PDF">⬇</button>
                   <button class="icon" data-act="wa" title="שליחה בוואטסאפ">💬</button>
-                  ${orderLink(q, true)}
+                  ${formIcon(q)}${orderLink(q, true)}
                   <button class="icon danger" data-act="del" title="מחיקה">🗑</button>
                 </td>
               </tr>`;
@@ -421,6 +424,8 @@ function renderList() {
     if (btn.dataset.act === 'pdf') downloadPdf(q);
     if (btn.dataset.act === 'wa') openWhatsApp(q);
     if (btn.dataset.act === 'del') deleteQuote(q);
+    if (btn.dataset.act === 'send-form') sendForm(q);
+    if (btn.dataset.act === 'load-form') loadFromForm(q);
   });
 }
 
@@ -1869,6 +1874,14 @@ function formButtons(q, small = false) {
   );
 }
 
+// אייקון ברשימת ההצעות: שליחת טופס מנות, או טעינת הבחירה כשהלקוח כבר מילא
+function formIcon(q) {
+  if (q.status !== 'approved' || orderOf(q) || !state.store.formsSupported) return '';
+  return formState(q) === 'submitted'
+    ? '<button class="icon form-ready" data-act="load-form" title="הלקוח בחר מנות – טעינה להזמנה">📥</button>'
+    : `<button class="icon" data-act="send-form" title="${formState(q) === 'none' ? 'שליחת טופס מנות ללקוח' : 'הטופס נשלח – שליחה שוב'}">📝</button>`;
+}
+
 function formAction(e, q) {
   const b = e.target.closest('[data-act]');
   if (b?.dataset.act === 'send-form') sendForm(q);
@@ -1934,6 +1947,7 @@ function refreshFormButtons(q) {
   const v = $('#v-order');
   if (v) v.innerHTML = orderLink(q) + formButtons(q);
   if (location.hash.startsWith('#/orders')) renderOrders();
+  else if (!location.hash || location.hash === '#/' || location.hash.startsWith('#/list')) renderList();
 }
 
 async function loadFromForm(q) {
