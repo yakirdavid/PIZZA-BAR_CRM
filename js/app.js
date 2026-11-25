@@ -2,7 +2,8 @@ import { createStore, isCloud } from './store.js';
 import { parseRequest } from './parse-request.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
-import { esc, eventTypeLabel, guestsText, renderPages, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
+import { ORDER_STATUSES, newOrder, orderRequirements, orderProblems } from './order.js';
+import { esc, eventTypeLabel, guestsText, renderPages, buildOrderBlocks, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 import { renderLanding } from './landing-stats.js';
 
 // ---------- עזרים ----------
@@ -93,6 +94,8 @@ const state = {
   quotes: [],
   dirty: false,
   listFilter: { q: '', status: '', type: '', sort: 'created' },
+  orders: [],
+  orderFilter: { q: '', status: '', sort: 'event' },
   landingRange: '30',
 };
 const images = {}; // ref → url
@@ -109,7 +112,12 @@ async function resolveImages(refs) {
 async function loadData() {
   state.settings = withDefaults(await state.store.getSettings());
   state.quotes = await state.store.listQuotes();
+  state.orders = await state.store.listOrders();
 }
+
+// הזמנה מקושרת להצעה (אחת לכל הצעה)
+const orderOf = (q) => state.orders.find((o) => o.quoteId === q?.id) || null;
+const quoteOf = (o) => state.quotes.find((q) => q.id === o?.quoteId) || null;
 
 // ---------- ניווט ----------
 function go(hash) {
@@ -135,7 +143,8 @@ async function route() {
   lastHash = location.hash;
   $$('.modal-back').forEach((m) => m.remove()); // חלון פתוח (למשל וואטסאפ) נסגר במעבר דף
   const [, page, id] = (location.hash || '#/').split('/');
-  $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === (page || 'list')));
+  const navPage = page?.startsWith('order') ? 'orders' : page || 'list';
+  $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === navPage));
   window.scrollTo(0, 0);
   try {
     if (!page || page === 'list') return renderList();
@@ -148,6 +157,23 @@ async function route() {
     if (page === 'view') {
       const q = state.quotes.find((x) => x.id === id) || (await state.store.getQuote(id));
       return q ? renderView(q) : notFound();
+    }
+    if (page === 'orders') return renderOrders();
+    if (page === 'order-new') {
+      const q = state.quotes.find((x) => x.id === id);
+      if (!q) return notFound();
+      if (orderOf(q)) return go(`#/order/${orderOf(q).id}`);
+      if (q.status !== 'approved') {
+        toast('אפשר ליצור הזמנה רק מהצעה מאושרת', 'error');
+        return go(`#/view/${q.id}`);
+      }
+      return renderOrderEditor(newOrder(q, state.settings.menu), q);
+    }
+    if (page === 'order' || page === 'order-edit') {
+      const o = state.orders.find((x) => x.id === id);
+      const q = quoteOf(o);
+      if (!o || !q) return notFound();
+      return page === 'order' ? renderOrderView(o, q) : renderOrderEditor(clone(o), q);
     }
     if (page === 'customers') return renderCustomers();
     if (page === 'settings') return renderSettings();
@@ -332,6 +358,7 @@ function renderList() {
                   <button class="icon" data-act="dup" title="שכפול">⧉</button>
                   <button class="icon" data-act="pdf" title="הורדת PDF">⬇</button>
                   <button class="icon" data-act="wa" title="שליחה בוואטסאפ">💬</button>
+                  ${orderLink(q, true)}
                   <button class="icon danger" data-act="del" title="מחיקה">🗑</button>
                 </td>
               </tr>`;
@@ -387,6 +414,7 @@ async function persist(q) {
 
 // מעבר לסטטוס "בוטלה" מחייב סיבת ביטול. מחזיר false אם השינוי לא נשמר.
 async function setStatus(q, status) {
+  if (status !== 'approved' && q.status === 'approved' && orderOf(q) && !confirmOrderStatus(q)) return false;
   let reason = q.cancelReason;
   if (status === 'cancelled') {
     reason = await askCancelReason(q);
@@ -459,8 +487,19 @@ function duplicateQuote(q) {
   go('#/edit/draft');
 }
 
+// שינוי סטטוס של הצעה מאושרת שכבר יש לה הזמנה – מבקשים אישור
+function confirmOrderStatus(q) {
+  return confirm(`להצעה ${q.number} יש הזמנה. לשנות את סטטוס ההצעה בכל זאת? ההזמנה תישאר.`);
+}
+
 async function deleteQuote(q) {
-  if (!confirm(`למחוק את הצעה ${q.number} של ${q.customer?.name || 'ללא שם'}? לא ניתן לבטל.`)) return;
+  const o = orderOf(q);
+  const also = o ? ' וגם את ההזמנה המקושרת אליה' : '';
+  if (!confirm(`למחוק את הצעה ${q.number} של ${q.customer?.name || 'ללא שם'}${also}? לא ניתן לבטל.`)) return;
+  if (o) {
+    await state.store.deleteOrder(o.id);
+    state.orders = state.orders.filter((x) => x.id !== o.id);
+  }
   await state.store.deleteQuote(q.id);
   state.quotes = state.quotes.filter((x) => x.id !== q.id);
   toast('ההצעה נמחקה');
@@ -487,13 +526,13 @@ async function prepareStage(q, { frozen = false, stage = $('#doc-stage') } = {})
 
 // התצוגה המקדימה מציגה את אותן תמונות עמוד שנכנסות ל-PDF, כך שהם זהים לגמרי
 let previewToken = 0;
-async function renderPdfPreview(q, preview) {
+async function renderPdfPreview(q, preview, prepare = (stage) => prepareStage(q, { stage })) {
   const token = ++previewToken;
   const stage = document.createElement('div');
   stage.className = 'offstage';
   document.body.append(stage);
   try {
-    await prepareStage(q, { stage });
+    await prepare(stage);
     const canvases = await renderStageCanvases(stage);
     if (token !== previewToken || !preview.isConnected) return;
     preview.replaceChildren(
@@ -569,18 +608,19 @@ function waMessage(q, link) {
     .trim();
 }
 
-async function openWhatsApp(q) {
-  const hasPhone = normPhone(q.customer?.phone).length >= 9;
+// חלון שליחה בוואטסאפ (להצעה או להזמנה): מפיק PDF, מעלה אותו לקישור ופותח צ'אט עם ההודעה
+async function openWaDialog({ title, customer, makePdf, message, onReady, onSent }) {
+  const hasPhone = normPhone(customer?.phone).length >= 9;
   const back = document.createElement('div');
   back.className = 'modal-back';
   back.innerHTML = `
     <div class="modal card" role="dialog" aria-label="שליחה בוואטסאפ">
-      <div class="modal-head"><h2>💬 שליחת הצעה ${esc(q.number)} בוואטסאפ</h2><button class="icon" data-x title="סגירה">✕</button></div>
+      <div class="modal-head"><h2>${esc(title)}</h2><button class="icon" data-x title="סגירה">✕</button></div>
       <div class="wa-status" id="wa-status"><span class="spinner small"></span> מכין את ה-PDF…</div>
       <div id="wa-body" hidden>
         <label class="field"><span>ההודעה (אפשר לערוך)</span><textarea id="wa-msg" rows="6"></textarea></label>
         <div class="wa-actions">
-          <button class="btn wa-btn" id="wa-customer" ${hasPhone ? '' : 'disabled'}>💬 ללקוח: ${esc(q.customer?.name || '')} <span dir="ltr">${esc(q.customer?.phone || 'אין טלפון')}</span></button>
+          <button class="btn wa-btn" id="wa-customer" ${hasPhone ? '' : 'disabled'}>💬 ללקוח: ${esc(customer?.name || '')} <span dir="ltr">${esc(customer?.phone || 'אין טלפון')}</span></button>
           <div class="wa-other">
             <input type="tel" id="wa-phone" dir="ltr" placeholder="מספר אחר: 050-1234567" inputmode="tel">
             <button class="btn" id="wa-other-send">שליחה</button>
@@ -599,7 +639,7 @@ async function openWhatsApp(q) {
 
   let result;
   try {
-    result = await generatePdf(q, { upload: true });
+    result = await makePdf();
   } catch (err) {
     $('#wa-status', back).innerHTML = `⚠️ שגיאה בהפקת ה-PDF: ${esc(err.message)}`;
     return;
@@ -615,28 +655,19 @@ async function openWhatsApp(q) {
   else if (uploadError) status = `⚠️ ה-PDF מוכן, אבל העלאת הקישור נכשלה (${esc(uploadError.message)}). אפשר לשתף את הקובץ עצמו.`;
   else status = 'ℹ️ ה-PDF מוכן. במצב מקומי אין קישור – שתפו את הקובץ או הורידו וצרפו אותו.';
   $('#wa-status', back).innerHTML = status;
-  $('#wa-msg', back).value = waMessage(result.doc, url);
+  $('#wa-msg', back).value = message(result);
   $('#wa-body', back).hidden = false;
   $('#wa-share', back).hidden = !canShareFile;
-  renderSideCopies(q);
+  onReady?.(result);
 
-  const markSent = async () => {
-    if (q.status !== 'draft') return;
-    await setStatus(q, 'sent');
-    const sel = $('#v-status');
-    if (sel) {
-      sel.value = 'sent';
-      sel.className = 'status-select badge sent';
-    }
-  };
   const openChat = (phone) => {
     const text = encodeURIComponent($('#wa-msg', back).value);
     const target = phone ? `https://wa.me/${waPhone(phone)}?text=${text}` : `https://wa.me/?text=${text}`;
     const w = window.open(target, '_blank', 'noopener');
     if (!w) location.href = target;
-    markSent();
+    onSent?.();
   };
-  $('#wa-customer', back).addEventListener('click', () => openChat(q.customer.phone));
+  $('#wa-customer', back).addEventListener('click', () => openChat(customer.phone));
   $('#wa-other-send', back).addEventListener('click', () => {
     const ph = $('#wa-phone', back).value.trim();
     if (!validPhone(ph)) return toast('מספר לא תקין – 10 ספרות שמתחילות ב-05', 'error');
@@ -646,12 +677,31 @@ async function openWhatsApp(q) {
   $('#wa-share', back).addEventListener('click', async () => {
     try {
       await navigator.share({ files: [file], text: $('#wa-msg', back).value });
-      markSent();
+      onSent?.();
     } catch (err) {
       if (err.name !== 'AbortError') toast('השיתוף נכשל: ' + err.message, 'error');
     }
   });
   $('#wa-download', back).addEventListener('click', () => saveBlob(blob, name));
+}
+
+function openWhatsApp(q) {
+  return openWaDialog({
+    title: `💬 שליחת הצעה ${q.number} בוואטסאפ`,
+    customer: q.customer,
+    makePdf: () => generatePdf(q, { upload: true }),
+    message: (r) => waMessage(r.doc, r.url),
+    onReady: () => renderSideCopies(q),
+    onSent: async () => {
+      if (q.status !== 'draft') return;
+      await setStatus(q, 'sent');
+      const sel = $('#v-status');
+      if (sel) {
+        sel.value = 'sent';
+        sel.className = 'status-select badge sent';
+      }
+    },
+  });
 }
 
 // ---------- עורך הצעה ----------
@@ -1068,6 +1118,8 @@ function renderEditor(q) {
       $('#f_cancelReason')?.focus();
       return;
     }
+    const saved = state.quotes.find((x) => x.id === q.id);
+    if (saved?.status === 'approved' && q.status !== 'approved' && orderOf(q) && !confirmOrderStatus(q)) return;
     if (q.status === 'cancelled') q.cancelReason = q.cancelReason.trim();
     else delete q.cancelReason;
     busy(true, 'שומר...');
@@ -1197,6 +1249,7 @@ async function renderView(q) {
         <button class="btn ghost" id="v-print">🖨 הדפסה</button>
         <button class="btn ghost" id="v-pdf">⬇ הורדת PDF</button>
         <button class="btn primary wa-main" id="v-wa">💬 שליחה בוואטסאפ</button>
+        <span id="v-order">${orderLink(q)}</span>
         <button class="btn ghost danger" id="v-del">🗑</button>
       </div>
     </div>
@@ -1232,6 +1285,7 @@ async function renderView(q) {
     await setStatus(q, e.target.value);
     e.target.value = q.status;
     e.target.className = `status-select badge ${q.status}`;
+    $('#v-order').innerHTML = orderLink(q);
     const cr = $('#v-cancel-reason');
     if (cr) {
       cr.hidden = q.status !== 'cancelled';
@@ -1279,6 +1333,450 @@ function waPhone(p) {
   let d = normPhone(p);
   if (d.startsWith('0')) d = '972' + d.slice(1);
   return d;
+}
+
+// ---------- הזמנות ----------
+const orderStatusLabel = (id) => ORDER_STATUSES.find((s) => s.id === id)?.label || id;
+const orderStatusSelect = (o, id, attrs = '') =>
+  `<select ${id ? `id="${id}"` : ''} class="status-select badge o-${o.status}" ${attrs}>${ORDER_STATUSES.map(
+    (st) => `<option value="${st.id}" ${st.id === o.status ? 'selected' : ''}>${st.label}</option>`
+  ).join('')}</select>`;
+
+// כפתור/אייקון בהצעה: מעבר להזמנה הקיימת, או יצירת הזמנה (רק בהצעה מאושרת)
+function orderLink(q, icon = false) {
+  const o = orderOf(q);
+  if (o) return icon ? `<a class="icon" href="#/order/${o.id}" title="להזמנה">📦</a>` : `<a class="btn ghost" href="#/order/${o.id}">📦 להזמנה ${esc(o.number)}</a>`;
+  if (q.status !== 'approved') return '';
+  return icon
+    ? `<a class="icon" href="#/order-new/${q.id}" title="יצירת הזמנה">➕</a>`
+    : `<a class="btn order-btn" href="#/order-new/${q.id}">📦 יצירת הזמנה</a>`;
+}
+
+async function persistOrder(o) {
+  o.updatedAt = new Date().toISOString();
+  await state.store.saveOrder(o);
+  const i = state.orders.findIndex((x) => x.id === o.id);
+  if (i >= 0) state.orders[i] = o;
+  else state.orders.push(o);
+}
+
+const orderReq = (q) => orderRequirements(q, state.settings.menu);
+const orderPdfName = (o, q) => `הזמנה ${o.number} - ${(q.customer?.name || '').replace(/[\\/:*?"<>|]/g, '')}.pdf`;
+
+async function prepareOrderStage(o, q, stage = $('#doc-stage')) {
+  const doc = withLiveBrand(q);
+  const imgs = await resolveImages(doc.brand?.images);
+  return renderPages(stage, doc, imgs, buildOrderBlocks(doc, imgs, o, state.settings.menu));
+}
+
+// לא שולחים/מפיקים הזמנה שחסרות בה מנות (למשל אם מספר הפיצות בהצעה השתנה)
+function orderReady(o, q) {
+  const problems = orderProblems(o, orderReq(q));
+  if (!problems.length) return true;
+  toast(`${problems[0].msg} – יש להשלים את בחירת המנות`, 'error');
+  go(`#/order-edit/${o.id}`);
+  return false;
+}
+
+async function generateOrderPdf(o, q, { upload = false } = {}) {
+  await prepareOrderStage(o, q);
+  const name = orderPdfName(o, q);
+  const blob = await pagesToPdfBlob($('#doc-stage'), name.replace(/\.pdf$/, ''));
+  let url = null;
+  let uploadError = null;
+  if (upload) {
+    try {
+      url = await state.store.uploadPdf(blob, `order-${o.number}`);
+    } catch (err) {
+      uploadError = err;
+    }
+  }
+  if (url) {
+    o.lastPdf = { at: new Date().toISOString(), url };
+    await persistOrder(o);
+  }
+  return { blob, name, url, uploadError };
+}
+
+async function downloadOrderPdf(o, q) {
+  if (!orderReady(o, q)) return;
+  busy(true, 'מפיק PDF...');
+  try {
+    const { blob, name } = await generateOrderPdf(o, q);
+    saveBlob(blob, name);
+    toast('ה-PDF של ההזמנה הורד');
+  } catch (err) {
+    console.error(err);
+    toast('שגיאה בהפקת PDF: ' + err.message, 'error');
+  } finally {
+    busy(false);
+  }
+}
+
+function orderWaMessage(o, q, link) {
+  return (state.settings.whatsapp?.orderMessage || '')
+    .replaceAll('{שם_לקוח}', q.customer?.name || '')
+    .replaceAll('{סוג_אירוע}', eventTypeLabel(q))
+    .replaceAll('{תאריך_אירוע}', eventDateShort(q) || '')
+    .replaceAll('{מספר_הזמנה}', String(o.number ?? ''))
+    .replaceAll('{מספר_הצעה}', String(q.number ?? ''))
+    .replaceAll('{סכום}', formatILS(calcQuote(q).total))
+    .replaceAll('{קישור}', link || '')
+    .replace(/[ \t]*\(\s*\)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function openOrderWhatsApp(o, q) {
+  if (!orderReady(o, q)) return;
+  return openWaDialog({
+    title: `💬 שליחת הזמנה ${o.number} בוואטסאפ`,
+    customer: q.customer,
+    makePdf: () => generateOrderPdf(o, q, { upload: true }),
+    message: (r) => orderWaMessage(o, q, r.url),
+    onSent: async () => {
+      if (o.status !== 'new') return;
+      o.status = 'sent';
+      o.sentAt = new Date().toISOString();
+      await persistOrder(o);
+      toast('ההזמנה סומנה כנשלחה ללקוח');
+      const sel = $('#o-status');
+      if (sel) {
+        sel.value = 'sent';
+        sel.className = 'status-select badge o-sent';
+      }
+    },
+  });
+}
+
+async function deleteOrder(o) {
+  if (!confirm(`למחוק את הזמנה ${o.number}? ההצעה עצמה לא תימחק, ואפשר יהיה ליצור ממנה הזמנה חדשה.`)) return;
+  await state.store.deleteOrder(o.id);
+  state.orders = state.orders.filter((x) => x.id !== o.id);
+  toast('ההזמנה נמחקה');
+  go('#/orders');
+}
+
+function sortOrders(list, sort) {
+  const key = (o) => eventDateKey(quoteOf(o) || {});
+  const by = {
+    event: (a, b) => (key(a) || '9999').localeCompare(key(b) || '9999'),
+    eventDesc: (a, b) => (key(b) || '0000').localeCompare(key(a) || '0000'),
+    created: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
+  }[sort];
+  return [...list].sort(by);
+}
+
+function renderOrders() {
+  const f = state.orderFilter;
+  const counts = Object.fromEntries(ORDER_STATUSES.map((st) => [st.id, 0]));
+  state.orders.forEach((o) => (counts[o.status] = (counts[o.status] || 0) + 1));
+  // הצעות מאושרות שעוד אין להן הזמנה
+  const waiting = sortQuotes(
+    state.quotes.filter((q) => q.status === 'approved' && !orderOf(q)),
+    'event'
+  );
+
+  $('#main').innerHTML = `
+    <div class="page-head"><h1>הזמנות</h1></div>
+    ${
+      waiting.length
+        ? `<section class="card waiting-orders">
+            <h2>הצעות מאושרות שממתינות להזמנה (${waiting.length})</h2>
+            <div class="waiting-list">${waiting
+              .map(
+                (q) => `<div class="waiting-item">
+                  <span><b>${esc(q.customer?.name)}</b> · הצעה ${esc(q.number)} · ${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'}</span>
+                  <a class="btn small order-btn" href="#/order-new/${q.id}">📦 יצירת הזמנה</a>
+                </div>`
+              )
+              .join('')}</div>
+          </section>`
+        : ''
+    }
+    <div class="stats">
+      ${ORDER_STATUSES.map(
+        (st) => `<button class="stat ${f.status === st.id ? 'on' : ''}" data-status="${st.id}"><b>${counts[st.id] || 0}</b><span class="badge o-${st.id}">${st.label}</span></button>`
+      ).join('')}
+    </div>
+    <div class="toolbar">
+      <input type="search" id="of-q" placeholder="חיפוש לפי שם, טלפון, מספר הזמנה..." value="${esc(f.q)}">
+      <select id="of-status"><option value="">כל הסטטוסים</option>${ORDER_STATUSES.map((st) => `<option value="${st.id}" ${f.status === st.id ? 'selected' : ''}>${st.label}</option>`).join('')}</select>
+      <select id="of-sort">
+        <option value="event" ${f.sort === 'event' ? 'selected' : ''}>מיון: תאריך אירוע – מהקרוב לרחוק</option>
+        <option value="eventDesc" ${f.sort === 'eventDesc' ? 'selected' : ''}>מיון: תאריך אירוע – מהרחוק לקרוב</option>
+        <option value="created" ${f.sort === 'created' ? 'selected' : ''}>מיון: חדשות קודם</option>
+      </select>
+    </div>
+    <div id="orders-body"></div>`;
+
+  const draw = () => {
+    const term = f.q.trim().toLowerCase();
+    const rows = sortOrders(
+      state.orders.filter((o) => {
+        const q = quoteOf(o);
+        if (f.status && o.status !== f.status) return false;
+        if (!term) return true;
+        return [o.number, q?.customer?.name, q?.customer?.phone, normPhone(q?.customer?.phone)].join(' ').toLowerCase().includes(term);
+      }),
+      f.sort
+    );
+    $('#orders-body').innerHTML = rows.length
+      ? `<table class="quotes">
+          <thead><tr><th>מס׳</th><th>לקוח</th><th>טלפון</th><th>אירוע</th><th>תאריך</th><th>משתתפים</th><th>מנות</th><th>סכום</th><th>סטטוס</th><th></th></tr></thead>
+          <tbody>${rows
+            .map((o) => {
+              const q = quoteOf(o) || { customer: {} };
+              const missing = q.id ? orderProblems(o, orderReq(q)).length : 0;
+              return `<tr data-id="${o.id}">
+                <td data-l="מס׳" class="num"><a href="#/order/${o.id}">${esc(o.number)}</a></td>
+                <td data-l="לקוח"><a href="#/order/${o.id}"><b>${esc(q.customer?.name)}</b></a></td>
+                <td data-l="טלפון"><a href="tel:${esc(normPhone(q.customer?.phone))}" dir="ltr">${esc(q.customer?.phone)}</a></td>
+                <td data-l="אירוע">${esc(eventTypeLabel(q))}</td>
+                <td data-l="תאריך">${esc(eventDateShort(q)) || '—'}</td>
+                <td data-l="משתתפים">${esc(guestsText(q)) || '—'}</td>
+                <td data-l="מנות">${missing ? '<span class="pill warn">חסרות מנות</span>' : '<span class="pill ok">✓ נבחרו</span>'}</td>
+                <td data-l="סכום" class="money">${q.id ? formatILS(calcQuote(q).total) : '—'}</td>
+                <td data-l="סטטוס">${orderStatusSelect(o, '', 'data-act="ostatus"')}</td>
+                <td class="actions">
+                  <a class="icon" href="#/order/${o.id}" title="תצוגה">👁</a>
+                  <a class="icon" href="#/order-edit/${o.id}" title="עריכת המנות">✎</a>
+                  <a class="icon" href="#/view/${o.quoteId}" title="ההצעה">📄</a>
+                  <button class="icon" data-act="opdf" title="הורדת PDF">⬇</button>
+                  <button class="icon" data-act="owa" title="שליחה בוואטסאפ">💬</button>
+                </td>
+              </tr>`;
+            })
+            .join('')}</tbody></table>`
+      : `<div class="empty"><p>${
+          state.orders.length
+            ? 'לא נמצאו הזמנות התואמות לחיפוש.'
+            : 'עדיין אין הזמנות. יוצרים הזמנה מתוך הצעת מחיר מאושרת (כפתור "📦 יצירת הזמנה").'
+        }</p></div>`;
+  };
+  draw();
+
+  $('#of-q').addEventListener('input', (e) => ((f.q = e.target.value), draw()));
+  $('#of-status').addEventListener('change', (e) => ((f.status = e.target.value), renderOrders()));
+  $('#of-sort').addEventListener('change', (e) => ((f.sort = e.target.value), draw()));
+  $$('.stat[data-status]').forEach((b) =>
+    b.addEventListener('click', () => ((f.status = f.status === b.dataset.status ? '' : b.dataset.status), renderOrders()))
+  );
+  $('#orders-body').addEventListener('change', async (e) => {
+    if (e.target.dataset.act !== 'ostatus') return;
+    const o = state.orders.find((x) => x.id === e.target.closest('tr').dataset.id);
+    o.status = e.target.value;
+    await persistOrder(o);
+    toast(`סטטוס ההזמנה עודכן: ${orderStatusLabel(o.status)}`);
+    renderOrders();
+  });
+  $('#orders-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const o = state.orders.find((x) => x.id === btn.closest('tr').dataset.id);
+    const q = quoteOf(o);
+    if (!q) return toast('ההצעה המקושרת לא נמצאה', 'error');
+    if (btn.dataset.act === 'opdf') downloadOrderPdf(o, q);
+    if (btn.dataset.act === 'owa') openOrderWhatsApp(o, q);
+  });
+}
+
+// עורך הזמנה: בחירת המנות (חובה) והערות
+function renderOrderEditor(o, q) {
+  const s = state.settings;
+  const req = orderReq(q);
+  const c = calcQuote(q);
+  let tried = false; // אחרי ניסיון שמירה – מסמנים באדום את מה שחסר
+  const backHref = o.id ? `#/order/${o.id}` : `#/view/${q.id}`;
+
+  $('#main').innerHTML = `
+    <div class="page-head">
+      <h1>${o.id ? `עריכת הזמנה ${esc(o.number)}` : `הזמנה חדשה מהצעה ${esc(q.number)}`}</h1>
+      <div class="head-actions">
+        <a class="btn ghost" href="${backHref}">ביטול</a>
+        <button class="btn" id="o-save">שמירה</button>
+        <button class="btn primary" id="o-save-view">שמירה ותצוגה מקדימה</button>
+      </div>
+    </div>
+    <form id="oform" class="card order-form" autocomplete="off" onsubmit="return false">
+      <div class="order-quote">
+        <div><b>${esc(q.customer?.name)}</b> · <span dir="ltr">${esc(q.customer?.phone)}</span></div>
+        <div>${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'} · מסלול ${esc(q.pkg?.name || '')} · ${esc(guestsText(q)) || '—'} · ${formatILS(c.total)}</div>
+        <a href="#/view/${q.id}">📄 להצעה ${esc(q.number)}</a>
+      </div>
+      <div id="o-picks"></div>
+      <h2>הערות</h2>
+      ${field('הערות ללקוח (יודפסו בהזמנה)', 'notes', o, { type: 'textarea' })}
+      <div class="internal-box">
+        <h3>🔒 פנימי בלבד – לא מודפס</h3>
+        ${field('הערות פנימיות', 'internalNotes', o, { type: 'textarea' })}
+      </div>
+      ${o.id ? `<div class="grid">${field('סטטוס ההזמנה', 'status', o, { options: ORDER_STATUSES.map((x) => [x.id, x.label]) })}</div>` : ''}
+    </form>`;
+
+  const groups = [
+    { key: 'pizzas', title: 'פיצות', list: s.menu.pizzas, need: req.pizzas },
+    { key: 'starters', title: 'ראשונות וסלטים', list: s.menu.starters, need: req.starters },
+    { key: 'desserts', title: 'קינוחים', list: s.menu.desserts, need: 0, optional: true },
+  ].filter((g) => g.need > 0 || (g.optional && g.list?.length) || o[g.key]?.length);
+
+  const countText = (g) => {
+    const n = (o[g.key] || []).length;
+    if (!g.need) return `רשות · נבחרו ${n}`;
+    return n === g.need ? `✓ נבחרו ${n} מתוך ${g.need}` : `נבחרו ${n} מתוך ${g.need}`;
+  };
+  const countState = (g) => {
+    if (!g.need) return '';
+    const n = (o[g.key] || []).length;
+    return n === g.need ? 'ok' : tried ? 'err' : '';
+  };
+
+  const drawPicks = () => {
+    $('#o-picks').innerHTML = groups
+      .map((g) => {
+        const names = (g.list || []).map((x) => x.name);
+        const extra = (o[g.key] || []).filter((n) => !names.includes(n)); // מנה שהוסרה מהתפריט
+        return `<section class="pick-group" data-group="${g.key}">
+          <h2>${esc(g.title)}${g.need ? ` – יש לבחור ${g.need} *` : ' (רשות)'}</h2>
+          <p class="pick-count ${countState(g)}" data-count="${g.key}">${countText(g)}</p>
+          <div class="chips">
+            ${[...names, ...extra]
+              .map((n) => {
+                const d = (g.list || []).find((x) => x.name === n)?.desc;
+                return `<label class="chip" ${d ? `title="${esc(d)}"` : ''}><input type="checkbox" data-pick="${g.key}" value="${esc(n)}" ${
+                  (o[g.key] || []).includes(n) ? 'checked' : ''
+                }> ${esc(n)}</label>`;
+              })
+              .join('')}
+          </div>
+        </section>`;
+      })
+      .join('');
+  };
+  drawPicks();
+
+  const form = $('#oform');
+  bindForm(form, o, () => (state.dirty = true));
+  form.addEventListener('change', (e) => {
+    const el = e.target;
+    const key = el.dataset.pick;
+    if (!key) return;
+    const g = groups.find((x) => x.key === key);
+    const picked = $$(`[data-pick="${key}"]:checked`, form).map((x) => x.value);
+    if (g.need && picked.length > g.need) {
+      el.checked = false;
+      toast(`ניתן לבחור עד ${g.need} ב${g.title}. כדי להחליף מנה – בטלו קודם בחירה אחרת.`, 'error');
+      return;
+    }
+    // שומרים לפי סדר התפריט, כדי שההדפסה תהיה מסודרת
+    o[key] = picked;
+    state.dirty = true;
+    const cnt = $(`[data-count="${key}"]`, form);
+    cnt.textContent = countText(g);
+    cnt.className = `pick-count ${countState(g)}`;
+  });
+
+  async function save(thenView) {
+    const problems = orderProblems(o, req);
+    if (problems.length) {
+      tried = true;
+      drawPicks();
+      toast(problems.map((p) => p.msg).join(' · '), 'error');
+      $(`[data-group="${problems[0].key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!o.id) {
+      // הזמנה אחת לכל הצעה
+      if (orderOf(q)) {
+        toast('להצעה זו כבר קיימת הזמנה', 'error');
+        return go(`#/order/${orderOf(q).id}`);
+      }
+      const live = state.quotes.find((x) => x.id === q.id);
+      if (live?.status !== 'approved') return toast('ההצעה כבר לא מאושרת – אי אפשר ליצור ממנה הזמנה', 'error');
+    }
+    busy(true, 'שומר...');
+    try {
+      const isNew = !o.id;
+      await persistOrder(o);
+      state.dirty = false;
+      toast(isNew ? `הזמנה ${o.number} נוצרה` : `הזמנה ${o.number} נשמרה`);
+      if (thenView || isNew) go(`#/order/${o.id}`);
+    } catch (err) {
+      toast('שגיאה בשמירה: ' + err.message, 'error');
+    } finally {
+      busy(false);
+    }
+  }
+  $('#o-save').addEventListener('click', () => save(false));
+  $('#o-save-view').addEventListener('click', () => save(true));
+}
+
+async function renderOrderView(o, q) {
+  const c = calcQuote(q);
+  const problems = orderProblems(o, orderReq(q));
+  $('#main').innerHTML = `
+    <div class="page-head">
+      <h1>הזמנה ${esc(o.number)} · ${esc(q.customer?.name)}</h1>
+      <div class="head-actions">
+        ${orderStatusSelect(o, 'o-status')}
+        <a class="btn ghost" href="#/order-edit/${o.id}">✎ עריכת המנות</a>
+        <a class="btn ghost" href="#/view/${q.id}">📄 הצעה ${esc(q.number)}</a>
+        <button class="btn ghost" id="o-print">🖨 הדפסה</button>
+        <button class="btn ghost" id="o-pdf">⬇ הורדת PDF</button>
+        <button class="btn primary wa-main" id="o-wa">💬 שליחה ללקוח</button>
+        <button class="btn ghost danger" id="o-del">🗑</button>
+      </div>
+    </div>
+    ${
+      problems.length
+        ? `<div class="stale">${esc(problems.map((p) => p.msg).join(' · '))}. ייתכן שההצעה עודכנה אחרי יצירת ההזמנה.
+            <a class="btn small" href="#/order-edit/${o.id}">השלמת המנות</a></div>`
+        : ''
+    }
+    <div class="view-layout">
+      <div class="preview-wrap card"><div class="preview" id="preview"><div class="loading">טוען תצוגה...</div></div></div>
+      <aside class="card side">
+        <h3>פרטי ההזמנה</h3>
+        <div class="sum-row"><span>תאריך האירוע</span><b>${esc(eventDateShort(q)) || '—'}</b></div>
+        <div class="sum-row"><span>משתתפים</span><b>${esc(guestsText(q)) || '—'}</b></div>
+        <div class="sum-row"><span>סה״כ</span><b>${formatILS(c.total)}</b></div>
+        <div class="sum-row"><span>מקדמה</span><b>${formatILS(c.deposit)}</b></div>
+        <div class="sum-row"><span>יתרה</span><b>${formatILS(c.balance)}</b></div>
+        <div class="sum-row muted"><span>נוצרה</span><b>${new Date(o.createdAt).toLocaleDateString('he-IL')}</b></div>
+        ${o.sentAt ? `<div class="sum-row muted"><span>נשלחה ללקוח</span><b>${new Date(o.sentAt).toLocaleDateString('he-IL')}</b></div>` : ''}
+        ${o.lastPdf?.url ? `<p><a class="btn small ghost" href="${esc(o.lastPdf.url)}" target="_blank" rel="noopener">🔗 הקישור האחרון שנשלח</a></p>` : ''}
+        ${o.internalNotes ? `<div class="internal-notes"><b>הערות פנימיות:</b><br>${esc(o.internalNotes).replace(/\n/g, '<br>')}</div>` : ''}
+      </aside>
+    </div>`;
+
+  const pages = await prepareOrderStage(o, q);
+  const preview = $('#preview');
+  preview.innerHTML = '';
+  $$('#doc-stage .q-page').forEach((p) => preview.append(p.cloneNode(true)));
+  renderPdfPreview(q, preview, (stage) => prepareOrderStage(o, q, stage));
+  const fit = () => {
+    const w = $('.preview-wrap')?.clientWidth;
+    if (w) preview.style.zoom = Math.min(1, (w - 24) / 794);
+  };
+  fit();
+  window.onresize = fit;
+  preview.dataset.pages = pages;
+
+  $('#o-status').addEventListener('change', async (e) => {
+    o.status = e.target.value;
+    await persistOrder(o);
+    e.target.className = `status-select badge o-${o.status}`;
+    toast(`סטטוס ההזמנה עודכן: ${orderStatusLabel(o.status)}`);
+  });
+  $('#o-print').addEventListener('click', async () => {
+    if (!orderReady(o, q)) return;
+    await prepareOrderStage(o, q);
+    window.print();
+  });
+  $('#o-pdf').addEventListener('click', () => downloadOrderPdf(o, q));
+  $('#o-wa').addEventListener('click', () => openOrderWhatsApp(o, q));
+  $('#o-del').addEventListener('click', () => deleteOrder(o));
 }
 
 // ---------- לקוחות ----------
@@ -1384,6 +1882,7 @@ async function renderSettings() {
           ${field('פסקת פתיחה', 'business.intro', s, { type: 'textarea', cls: 'span2' })}
           ${field('פרטי קשר (שורת תחתית)', 'business.contact', s, { cls: 'span2' })}
           ${field('משפט סיום', 'business.closing', s, { cls: 'span2' })}
+          ${field('פסקת פתיחה במסמך ההזמנה', 'business.orderIntro', s, { type: 'textarea', cls: 'span2', hint: 'מודפסת בראש מסמך ההזמנה שנשלח ללקוח אחרי בחירת המנות' })}
           ${field('ברכה', 'business.blessing', s)}
           ${field('הערת מחיר', 'business.priceNote', s)}
         </div>
@@ -1519,7 +2018,8 @@ async function renderSettings() {
       ),
       sec(
         '💬 הודעת וואטסאפ',
-        `${field('נוסח ההודעה ללקוח', 'whatsapp.message', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}' })}`
+        `${field('נוסח ההודעה ללקוח', 'whatsapp.message', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}' })}
+        ${field('נוסח ההודעה לשליחת הזמנה', 'whatsapp.orderMessage', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הזמנה} {סכום} {קישור}' })}`
       ),
       sec(
         'ברירות מחדל להצעה חדשה',
@@ -1653,7 +2153,7 @@ async function renderSettings() {
     try {
       const data = JSON.parse(await file.text());
       if (data.app !== 'pizza-bar-quotes') throw new Error('הקובץ אינו גיבוי של המערכת');
-      if (!confirm(`לשחזר ${data.quotes?.length || 0} הצעות והגדרות מהגיבוי? הצעות קיימות עם אותו מזהה יוחלפו.`)) return;
+      if (!confirm(`לשחזר ${data.quotes?.length || 0} הצעות${data.orders?.length ? `, ${data.orders.length} הזמנות` : ''} והגדרות מהגיבוי? הצעות קיימות עם אותו מזהה יוחלפו.`)) return;
       busy(true, 'משחזר...');
       await state.store.importAll(data);
       await loadData();

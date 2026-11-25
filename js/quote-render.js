@@ -93,52 +93,24 @@ export function featuresFor(features, packageId) {
   });
 }
 
-// מחזיר רשימת בלוקים לפי סדר – כל בלוק נשאר שלם בעמוד אחד
-export function buildBlocks(q, images) {
-  const s = q.brand; // עותק ההגדרות שנשמר עם ההצעה
-  const c = calcQuote(q);
-  const pkg = q.pkg || {};
-  const g = q.guests || {};
-  const totalMinutes = Number(pkg.hours || 0) * 60 + Number(q.extensionMinutes || 0);
-  const adults = Number(g.adults) || 0;
-  const kids = Number(g.children) || 0;
-  const childFactor = Number(s.ageGroups?.childFactor ?? 0.5);
-  const guests = guestsText(q);
-  const blocks = [];
-  const add = (html, opts = {}) => blocks.push({ html, ...opts });
-
-  add(`
+function headerHtml(s, images, kicker, date, boxLine) {
+  return `
     <header class="q-head">
       <div class="q-head-text">
-        <div class="q-kicker">${esc(eventHeading(q))}</div>
+        <div class="q-kicker">${esc(kicker)}</div>
         <h1>${esc(s.business.title)}</h1>
         <div class="q-sub">${esc(s.business.subtitle)}</div>
       </div>
       ${images.logo ? `<img class="q-logo" src="${esc(images.logo)}" alt="">` : ''}
       <div class="q-datebox">
-        <div>${esc(formatDate(q.quoteDate))}</div>
-        <div>הצעת מחיר מס׳ ${esc(q.number ?? '')}</div>
+        <div>${esc(date)}</div>
+        <div>${esc(boxLine)}</div>
       </div>
-    </header>`);
+    </header>`;
+}
 
-  if (s.business.intro) add(`<p class="q-intro">${esc(s.business.intro)}</p>`);
-
-  const features = featuresFor(s.features, q.packageId);
-  if (features.length) {
-    add(`
-      <h2 class="q-h2">מה כוללת החוויה?</h2>
-      <div class="q-features">
-        ${features.map((f) => `<div class="q-card"><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p></div>`).join('')}
-      </div>`);
-  }
-
-  add(`
-    <div class="q-package">
-      <div class="q-package-title">מסלול ${esc(pkg.name)} | ${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
-      <p><b>כלול במסלול:</b> ${esc(pkg.includes)}</p>
-      ${pkg.description ? `<p>${esc(pkg.description)}</p>` : ''}
-    </div>`);
-
+function detailsHtml(q, s, totalMinutes, guests) {
+  const g = q.guests || {};
   const ev = q.event || {};
   const cust = q.customer || {};
   const rows = [
@@ -161,13 +133,50 @@ export function buildBlocks(q, images) {
         .join(' + '),
     ],
   ].filter(([, v]) => v);
-  add(`
+  return `
     <div class="q-details">
       <h2 class="q-h2">פרטי האירוע</h2>
       <div class="q-details-grid">
         ${rows.map(([k, v]) => `<div class="q-detail"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}
       </div>
+    </div>`;
+}
+
+// מחזיר רשימת בלוקים לפי סדר – כל בלוק נשאר שלם בעמוד אחד
+export function buildBlocks(q, images) {
+  const s = q.brand; // עותק ההגדרות שנשמר עם ההצעה
+  const c = calcQuote(q);
+  const pkg = q.pkg || {};
+  const g = q.guests || {};
+  const totalMinutes = Number(pkg.hours || 0) * 60 + Number(q.extensionMinutes || 0);
+  const adults = Number(g.adults) || 0;
+  const kids = Number(g.children) || 0;
+  const childFactor = Number(s.ageGroups?.childFactor ?? 0.5);
+  const guests = guestsText(q);
+  const blocks = [];
+  const add = (html, opts = {}) => blocks.push({ html, ...opts });
+
+  add(headerHtml(s, images, eventHeading(q), formatDate(q.quoteDate), `הצעת מחיר מס׳ ${q.number ?? ''}`));
+
+  if (s.business.intro) add(`<p class="q-intro">${esc(s.business.intro)}</p>`);
+
+  const features = featuresFor(s.features, q.packageId);
+  if (features.length) {
+    add(`
+      <h2 class="q-h2">מה כוללת החוויה?</h2>
+      <div class="q-features">
+        ${features.map((f) => `<div class="q-card"><h3>${esc(f.title)}</h3><p>${esc(f.text)}</p></div>`).join('')}
+      </div>`);
+  }
+
+  add(`
+    <div class="q-package">
+      <div class="q-package-title">מסלול ${esc(pkg.name)} | ${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
+      <p><b>כלול במסלול:</b> ${esc(pkg.includes)}</p>
+      ${pkg.description ? `<p>${esc(pkg.description)}</p>` : ''}
     </div>`);
+
+  add(detailsHtml(q, s, totalMinutes, guests));
 
   const pizzas = (q.pizzas || []).filter(Boolean);
   const photos = [images.photo1, images.photo2].filter(Boolean);
@@ -305,6 +314,92 @@ export function buildBlocks(q, images) {
   return blocks;
 }
 
+function orderHeading(q) {
+  const t = eventTypeLabel(q);
+  return /^(אירוע|מסיב)/.test(t) ? `אישור הזמנה ל${t}` : `אישור הזמנה לאירוע ${t}`;
+}
+
+// מסמך ההזמנה ללקוח: פרטי האירוע, המנות שנבחרו ופרטי התשלום.
+// q – ההצעה המקושרת (עם עותק ההגדרות), order – ההזמנה, menu – התפריט (לתיאורי המנות)
+export function buildOrderBlocks(q, images, order, menu = {}) {
+  const s = q.brand;
+  const c = calcQuote(q);
+  const pkg = q.pkg || {};
+  const totalMinutes = Number(pkg.hours || 0) * 60 + Number(q.extensionMinutes || 0);
+  const guests = guestsText(q);
+  const blocks = [];
+  const add = (html, opts = {}) => blocks.push({ html, ...opts });
+
+  add(headerHtml(s, images, orderHeading(q), formatDate((order.updatedAt || order.createdAt || '').slice(0, 10)), `הזמנה מס׳ ${order.number ?? ''}`));
+  if (s.business.orderIntro) add(`<p class="q-intro">${esc(s.business.orderIntro)}</p>`);
+  add(`
+    <div class="q-package">
+      <div class="q-package-title">מסלול ${esc(pkg.name)} | ${esc(formatDuration(totalMinutes))} הגשה ללא הגבלה</div>
+      <p><b>כלול במסלול:</b> ${esc(pkg.includes)}</p>
+    </div>`);
+  add(detailsHtml(q, s, totalMinutes, guests));
+
+  const desc = (list, name) => (list || []).find((x) => x.name === name)?.desc || '';
+  const group = (title, names, list) =>
+    names?.length
+      ? `<div class="q-order-group">
+          <h3>${esc(title)} <small>(${names.length})</small></h3>
+          <ul>${names
+            .map((n) => {
+              const d = desc(list, n);
+              return `<li><b>${esc(n)}</b>${d ? `<span>${esc(d)}</span>` : ''}</li>`;
+            })
+            .join('')}</ul>
+        </div>`
+      : '';
+  add(`<h2 class="q-h2">התפריט שבחרתם</h2>`, { keepWithNext: true });
+  for (const [title, key, list] of [
+    ['פיצות', 'pizzas', menu.pizzas],
+    ['ראשונות וסלטים', 'starters', menu.starters],
+    ['קינוחים', 'desserts', menu.desserts],
+  ]) {
+    const html = group(title, order[key], list);
+    if (html) add(`<div class="q-order-menu">${html}</div>`);
+  }
+
+  const extras = [
+    ...(c.pastaPrice ? [`${q.pasta?.name || 'פסטה'} – ${q.pasta?.portions} מנות`] : []),
+    ...c.addons.map((a) => (a.unit === 'fixed' ? a.name : `${a.name} × ${a.qty}`)),
+    ...c.custom.map((x) => x.name).filter(Boolean),
+  ];
+  if (q.extensionMinutes > 0) extras.unshift(`הארכת זמן הגשה – ${formatDuration(q.extensionMinutes)}`);
+  if (extras.length)
+    add(`<div class="q-order-menu"><div class="q-order-group"><h3>תוספות להזמנה</h3><ul>${extras
+      .map((x) => `<li><b>${esc(x)}</b></li>`)
+      .join('')}</ul></div></div>`);
+
+  const line = (label, value, cls = '') => `<div class="q-line ${cls}"><span>${label}</span><b>${value}</b></div>`;
+  add(`
+    <section class="q-price">
+      <div class="q-price-head"><h2>פרטי תשלום</h2><span>${esc(guests)}</span></div>
+      <div class="q-price-body">
+        ${line('סה״כ להזמנה', formatILS(c.total), 'total')}
+        <div class="q-pay">
+          ${line('מקדמה לשריון התאריך', formatILS(c.deposit))}
+          ${line('יתרה לתשלום', formatILS(c.balance))}
+        </div>
+        ${s.business.priceNote ? `<div class="q-muted q-note">${esc(s.business.priceNote)}</div>` : ''}
+      </div>
+    </section>`);
+
+  if (order.notes?.trim()) add(`<div class="q-public-notes"><h2 class="q-h2">הערות</h2><p>${esc(order.notes).replace(/\n/g, '<br>')}</p></div>`);
+
+  add(`
+    <footer class="q-foot">
+      <div>
+        <div>${esc(s.business.closing)}</div>
+        ${s.business.contact ? `<div class="q-muted">${esc(s.business.contact)}</div>` : ''}
+      </div>
+      <div class="q-bless">${esc(s.business.blessing)}</div>
+    </footer>`);
+  return blocks;
+}
+
 function pageShell(inner, idx, total) {
   return `<div class="q-page"><div class="q-topbar"></div><div class="q-content">${inner}</div>${
     total > 1 ? `<div class="q-pagenum">עמוד ${idx + 1} מתוך ${total}</div>` : ''
@@ -321,8 +416,8 @@ async function waitForImages(root) {
 }
 
 // מחלק את הבלוקים לעמודי A4 בלי לחתוך בלוק באמצע
-export async function renderPages(stage, q, images) {
-  const blocks = buildBlocks(q, images);
+// blocks – רשימת בלוקים מוכנה (למשל של הזמנה); אם לא נמסרה – בלוקי הצעת המחיר
+export async function renderPages(stage, q, images, blocks = buildBlocks(q, images)) {
   stage.innerHTML = `<div class="q-page measure"><div class="q-content">${blocks
     .map((b) => `<div class="q-blk ${b.tight ? 'tight' : ''}">${b.html}</div>`)
     .join('')}</div></div>`;

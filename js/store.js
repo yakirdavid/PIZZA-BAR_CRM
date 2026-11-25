@@ -61,6 +61,21 @@ class LocalStore {
     delete all[id];
     this._set('pb_quotes', all);
   }
+  async listOrders() {
+    return Object.values(this._get('pb_orders', {}));
+  }
+  async saveOrder(o) {
+    const all = this._get('pb_orders', {});
+    if (!o.id) o.id = uid();
+    all[o.id] = o;
+    this._set('pb_orders', all);
+    return o;
+  }
+  async deleteOrder(id) {
+    const all = this._get('pb_orders', {});
+    delete all[id];
+    this._set('pb_orders', all);
+  }
   async nextNumber(start) {
     const cur = this._get('pb_counter', null);
     const next = Math.max(Number(cur ?? start - 1) + 1, start);
@@ -85,6 +100,7 @@ class LocalStore {
     return {
       settings: await this.getSettings(),
       quotes: await this.listQuotes(),
+      orders: await this.listOrders(),
       images: this._get('pb_images', {}),
       counter: this._get('pb_counter', null),
     };
@@ -94,6 +110,9 @@ class LocalStore {
     const all = this._get('pb_quotes', {});
     for (const q of data.quotes || []) all[q.id] = q;
     this._set('pb_quotes', all);
+    const orders = this._get('pb_orders', {});
+    for (const o of data.orders || []) orders[o.id] = o;
+    this._set('pb_orders', orders);
     this._set('pb_images', { ...this._get('pb_images', {}), ...(data.images || {}) });
     if (data.counter != null) this._set('pb_counter', Math.max(Number(data.counter), Number(this._get('pb_counter', 0))));
   }
@@ -171,6 +190,18 @@ class CloudStore {
   async deleteQuote(id) {
     await this.F.deleteDoc(this._doc('quotes', id));
   }
+  async listOrders() {
+    const snap = await this.F.getDocs(this._col('orders'));
+    return snap.docs.map((d) => d.data());
+  }
+  async saveOrder(o) {
+    if (!o.id) o.id = uid();
+    await this.F.setDoc(this._doc('orders', o.id), JSON.parse(JSON.stringify(o)));
+    return o;
+  }
+  async deleteOrder(id) {
+    await this.F.deleteDoc(this._doc('orders', id));
+  }
   async nextNumber(start) {
     const ref = this._doc('meta', 'counter');
     return this.F.runTransaction(this.db, async (tx) => {
@@ -199,6 +230,7 @@ class CloudStore {
     return {
       settings: await this.getSettings(),
       quotes: await this.listQuotes(),
+      orders: await this.listOrders(),
       images: Object.fromEntries(imgs.docs.map((d) => [d.id, d.data().data])),
       counter: counter.exists() ? counter.data().value : null,
     };
@@ -206,6 +238,7 @@ class CloudStore {
   async importAll(data) {
     if (data.settings) await this.saveSettings(data.settings);
     for (const q of data.quotes || []) await this.saveQuote(q);
+    for (const o of data.orders || []) await this.saveOrder(o);
     for (const [id, d] of Object.entries(data.images || {})) await this.F.setDoc(this._doc('images', id), { data: d });
     if (data.counter != null) {
       const ref = this._doc('meta', 'counter');
@@ -351,6 +384,17 @@ class SupabaseStore {
   async deleteQuote(id) {
     this._check(await this._table().delete().eq('kind', 'quote').eq('id', id));
   }
+  async listOrders() {
+    return (await this._all('order')).map((r) => r.data);
+  }
+  async saveOrder(o) {
+    if (!o.id) o.id = uid();
+    await this._put('order', o.id, JSON.parse(JSON.stringify(o)));
+    return o;
+  }
+  async deleteOrder(id) {
+    this._check(await this._table().delete().eq('kind', 'order').eq('id', id));
+  }
   async nextNumber(start) {
     return this._check(await this.sb.rpc('pb_next_number', { start_at: start }));
   }
@@ -406,6 +450,7 @@ class SupabaseStore {
     return {
       settings: await this.getSettings(),
       quotes: await this.listQuotes(),
+      orders: await this.listOrders(),
       images: Object.fromEntries((await this._all('image')).map((r) => [r.id, r.data])),
       counter: await this._get('counter', 'quote'),
     };
@@ -413,6 +458,7 @@ class SupabaseStore {
   async importAll(data) {
     if (data.settings) await this.saveSettings(data.settings);
     for (const q of data.quotes || []) await this.saveQuote(q);
+    for (const o of data.orders || []) await this.saveOrder(o);
     for (const [id, d] of Object.entries(data.images || {})) await this._put('image', id, d);
     if (data.counter != null) {
       const cur = Number((await this._get('counter', 'quote')) ?? 0);

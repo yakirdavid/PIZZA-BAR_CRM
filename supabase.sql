@@ -3,7 +3,7 @@
 
 create table if not exists public.pb_docs (
   user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  kind text not null,       -- quote | settings | image | counter
+  kind text not null,       -- quote | order | settings | image | counter
   id text not null,
   data jsonb not null,
   updated_at timestamptz not null default now(),
