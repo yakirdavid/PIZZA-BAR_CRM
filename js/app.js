@@ -2,7 +2,7 @@ import { createStore, isCloud } from './store.js';
 import { parseRequest } from './parse-request.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
-import { ORDER_STATUSES, newOrder, orderRequirements, orderProblems } from './order.js';
+import { ORDER_STATUSES, newOrder, orderRequirements, orderProblems, formSnapshot, orderFromSubmission } from './order.js';
 import { esc, eventTypeLabel, guestsText, renderPages, buildOrderBlocks, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 import { renderLanding } from './landing-stats.js';
 
@@ -95,6 +95,8 @@ const state = {
   dirty: false,
   listFilter: { q: '', status: '', type: '', sort: 'created' },
   orders: [],
+  forms: [], // טופסי בחירת מנות שנשלחו ללקוחות (רק עם Supabase)
+  formsError: null,
   orderFilter: { q: '', status: '', sort: 'event' },
   landingRange: '30',
 };
@@ -113,11 +115,23 @@ async function loadData() {
   state.settings = withDefaults(await state.store.getSettings());
   state.quotes = await state.store.listQuotes();
   state.orders = await state.store.listOrders();
+  await loadForms();
+}
+
+async function loadForms() {
+  if (!state.store.formsSupported) return;
+  try {
+    state.forms = await state.store.listForms();
+    state.formsError = null;
+  } catch (err) {
+    state.formsError = err.code === 'no-forms' ? 'no-table' : err.message;
+  }
 }
 
 // הזמנה מקושרת להצעה (אחת לכל הצעה)
 const orderOf = (q) => state.orders.find((o) => o.quoteId === q?.id) || null;
 const quoteOf = (o) => state.quotes.find((q) => q.id === o?.quoteId) || null;
+const formOf = (q) => state.forms.find((f) => f.quote_id === q?.id) || null;
 
 // ---------- ניווט ----------
 function go(hash) {
@@ -155,10 +169,14 @@ async function route() {
       return q ? renderEditor(clone(q)) : notFound();
     }
     if (page === 'view') {
+      await loadForms();
       const q = state.quotes.find((x) => x.id === id) || (await state.store.getQuote(id));
       return q ? renderView(q) : notFound();
     }
-    if (page === 'orders') return renderOrders();
+    if (page === 'orders') {
+      await loadForms();
+      return renderOrders();
+    }
     if (page === 'order-new') {
       const q = state.quotes.find((x) => x.id === id);
       if (!q) return notFound();
@@ -167,7 +185,9 @@ async function route() {
         toast('אפשר ליצור הזמנה רק מהצעה מאושרת', 'error');
         return go(`#/view/${q.id}`);
       }
-      return renderOrderEditor(newOrder(q, state.settings.menu), q);
+      const pending = state.pendingOrder?.quoteId === q.id ? state.pendingOrder : null;
+      state.pendingOrder = null;
+      return renderOrderEditor(pending || newOrder(q, state.settings.menu), q);
     }
     if (page === 'order' || page === 'order-edit') {
       const o = state.orders.find((x) => x.id === id);
@@ -637,27 +657,32 @@ async function openWaDialog({ title, customer, makePdf, message, onReady, onSent
     if (e.target === back || e.target.closest('[data-x]')) close();
   });
 
-  let result;
-  try {
-    result = await makePdf();
-  } catch (err) {
-    $('#wa-status', back).innerHTML = `⚠️ שגיאה בהפקת ה-PDF: ${esc(err.message)}`;
-    return;
+  let result = {};
+  if (makePdf) {
+    try {
+      result = await makePdf();
+    } catch (err) {
+      $('#wa-status', back).innerHTML = `⚠️ שגיאה בהפקת ה-PDF: ${esc(err.message)}`;
+      return;
+    }
   }
   const { blob, name, url, uploadError } = result;
-  const file = new File([blob], name, { type: 'application/pdf' });
-  const canShareFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  const file = blob ? new File([blob], name, { type: 'application/pdf' }) : null;
+  const canShareFile = !!(file && navigator.canShare && navigator.canShare({ files: [file] }));
 
   let status;
-  if (url) status = '✅ ה-PDF מוכן, והקישור אליו נוסף להודעה. הלקוח יפתח אותו בלחיצה.';
+  if (!makePdf) status = '';
+  else if (url) status = '✅ ה-PDF מוכן, והקישור אליו נוסף להודעה. הלקוח יפתח אותו בלחיצה.';
   else if (uploadError?.code === 'nobucket')
     status = '⚠️ ה-PDF מוכן, אבל עדיין אין אחסון לקישור. צריך להריץ פעם אחת את הקובץ supabase-storage.sql ב-Supabase (הסבר ב-README). בינתיים: "שיתוף קובץ ה-PDF" או הורדה וצירוף ידני.';
   else if (uploadError) status = `⚠️ ה-PDF מוכן, אבל העלאת הקישור נכשלה (${esc(uploadError.message)}). אפשר לשתף את הקובץ עצמו.`;
   else status = 'ℹ️ ה-PDF מוכן. במצב מקומי אין קישור – שתפו את הקובץ או הורידו וצרפו אותו.';
   $('#wa-status', back).innerHTML = status;
+  $('#wa-status', back).hidden = !status;
   $('#wa-msg', back).value = message(result);
   $('#wa-body', back).hidden = false;
   $('#wa-share', back).hidden = !canShareFile;
+  $('#wa-download', back).hidden = !blob;
   onReady?.(result);
 
   const openChat = (phone) => {
@@ -1249,7 +1274,7 @@ async function renderView(q) {
         <button class="btn ghost" id="v-print">🖨 הדפסה</button>
         <button class="btn ghost" id="v-pdf">⬇ הורדת PDF</button>
         <button class="btn primary wa-main" id="v-wa">💬 שליחה בוואטסאפ</button>
-        <span id="v-order">${orderLink(q)}</span>
+        <span id="v-order">${orderLink(q)}${formButtons(q)}</span>
         <button class="btn ghost danger" id="v-del">🗑</button>
       </div>
     </div>
@@ -1285,13 +1310,14 @@ async function renderView(q) {
     await setStatus(q, e.target.value);
     e.target.value = q.status;
     e.target.className = `status-select badge ${q.status}`;
-    $('#v-order').innerHTML = orderLink(q);
+    $('#v-order').innerHTML = orderLink(q) + formButtons(q);
     const cr = $('#v-cancel-reason');
     if (cr) {
       cr.hidden = q.status !== 'cancelled';
       $('span', cr).textContent = q.cancelReason || '';
     }
   });
+  $('#v-order').addEventListener('click', (e) => formAction(e, q));
   $('#v-dup').addEventListener('click', () => duplicateQuote(q));
   $('#v-del').addEventListener('click', () => deleteQuote(q));
   $('#v-print').addEventListener('click', async () => {
@@ -1484,11 +1510,18 @@ function renderOrders() {
       waiting.length
         ? `<section class="card waiting-orders">
             <h2>הצעות מאושרות שממתינות להזמנה (${waiting.length})</h2>
+            ${
+              state.store.formsSupported
+                ? `<p class="hint">כשבוע לפני האירוע שולחים ללקוח טופס בחירת מנות. כשהוא ממלא – תגיע אליך התראה, ו"טעינת בחירת הלקוח" יוצרת את ההזמנה.</p>
+                  ${state.formsError === 'no-table' ? `<div class="stale">${FORMS_SETUP_MSG}</div>` : ''}`
+                : ''
+            }
             <div class="waiting-list">${waiting
               .map(
-                (q) => `<div class="waiting-item">
-                  <span><b>${esc(q.customer?.name)}</b> · הצעה ${esc(q.number)} · ${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'}</span>
-                  <a class="btn small order-btn" href="#/order-new/${q.id}">📦 יצירת הזמנה</a>
+                (q) => `<div class="waiting-item ${(daysUntil(q) ?? 99) >= 0 && daysUntil(q) <= 8 ? 'soon' : ''}" data-qid="${q.id}">
+                  <span class="waiting-info"><span><b>${esc(q.customer?.name)}</b> · הצעה ${esc(q.number)} · ${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'}</span>
+                    <span class="pills">${whenPill(q)}${formPill(q)}</span></span>
+                  <span class="waiting-actions">${formButtons(q, true)}<a class="btn small ${state.store.formsSupported ? 'ghost' : 'order-btn'}" href="#/order-new/${q.id}">📦 ${state.store.formsSupported ? 'יצירה ידנית' : 'יצירת הזמנה'}</a></span>
                 </div>`
               )
               .join('')}</div>
@@ -1557,6 +1590,11 @@ function renderOrders() {
   };
   draw();
 
+  $('.waiting-orders')?.addEventListener('click', (e) => {
+    const id = e.target.closest('[data-qid]')?.dataset.qid;
+    const q = state.quotes.find((x) => x.id === id);
+    if (q) formAction(e, q);
+  });
   $('#of-q').addEventListener('input', (e) => ((f.q = e.target.value), draw()));
   $('#of-status').addEventListener('change', (e) => ((f.status = e.target.value), renderOrders()));
   $('#of-sort').addEventListener('change', (e) => ((f.sort = e.target.value), draw()));
@@ -1605,6 +1643,7 @@ function renderOrderEditor(o, q) {
         <div>${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'} · מסלול ${esc(q.pkg?.name || '')} · ${esc(guestsText(q)) || '—'} · ${formatILS(c.total)}</div>
         <a href="#/view/${q.id}">📄 להצעה ${esc(q.number)}</a>
       </div>
+      ${o.formToken ? '<div class="from-form">📥 המנות נטענו מהטופס שהלקוח מילא. עברו עליהן ושמרו כדי ליצור את ההזמנה.</div>' : ''}
       <div id="o-picks"></div>
       <h2>הערות</h2>
       ${field('הערות ללקוח (יודפסו בהזמנה)', 'notes', o, { type: 'textarea' })}
@@ -1699,6 +1738,15 @@ function renderOrderEditor(o, q) {
     try {
       const isNew = !o.id;
       await persistOrder(o);
+      if (isNew && o.formToken) {
+        try {
+          await state.store.markFormLoaded(o.formToken);
+          const f = state.forms.find((x) => x.token === o.formToken);
+          if (f) f.loaded_at = new Date().toISOString();
+        } catch (err) {
+          toast('ההזמנה נשמרה, אבל סימון הטופס כ"נטען" נכשל: ' + err.message, 'error');
+        }
+      }
       state.dirty = false;
       toast(isNew ? `הזמנה ${o.number} נוצרה` : `הזמנה ${o.number} נשמרה`);
       if (thenView || isNew) go(`#/order/${o.id}`);
@@ -1777,6 +1825,139 @@ async function renderOrderView(o, q) {
   $('#o-pdf').addEventListener('click', () => downloadOrderPdf(o, q));
   $('#o-wa').addEventListener('click', () => openOrderWhatsApp(o, q));
   $('#o-del').addEventListener('click', () => deleteOrder(o));
+}
+
+// ---------- טופס בחירת מנות ללקוח ----------
+// שבוע לפני האירוע שולחים ללקוח קישור לטופס. הבחירה שלו נשמרת ב-Supabase,
+// ומכאן טוענים אותה להזמנה בלחיצה.
+const daysUntil = (q) => {
+  const k = eventDateKey(q);
+  if (!k) return null;
+  return Math.round((new Date(k + 'T12:00:00') - new Date(today() + 'T12:00:00')) / 86400000);
+};
+
+function formState(q) {
+  const f = formOf(q);
+  if (!f) return 'none';
+  if (f.loaded_at) return 'loaded';
+  if (f.submitted_at) return 'submitted';
+  return 'sent';
+}
+
+function formPill(q) {
+  return {
+    sent: '<span class="pill wait">📝 הטופס נשלח – ממתין ללקוח</span>',
+    submitted: '<span class="pill ok">✅ הלקוח בחר מנות</span>',
+  }[formState(q)] || '';
+}
+
+function whenPill(q) {
+  const d = daysUntil(q);
+  if (d == null || d > 10) return '';
+  if (d < 0) return '<span class="pill muted">האירוע עבר</span>';
+  return `<span class="pill soon">⏰ ${d === 0 ? 'היום' : d === 1 ? 'מחר' : `בעוד ${d} ימים`}</span>`;
+}
+
+// כפתורי הטופס בהצעה מאושרת שעוד אין לה הזמנה
+function formButtons(q, small = false) {
+  if (q.status !== 'approved' || orderOf(q) || !state.store.formsSupported) return '';
+  const st = formState(q);
+  const cls = small ? 'btn small' : 'btn';
+  return (
+    (st === 'submitted' ? `<button type="button" class="${cls} order-btn" data-act="load-form">📥 טעינת בחירת הלקוח</button>` : '') +
+    `<button type="button" class="${cls} ghost" data-act="send-form">📝 ${st === 'none' ? 'שליחת טופס מנות' : 'שליחת הטופס שוב'}</button>`
+  );
+}
+
+function formAction(e, q) {
+  const b = e.target.closest('[data-act]');
+  if (b?.dataset.act === 'send-form') sendForm(q);
+  if (b?.dataset.act === 'load-form') loadFromForm(q);
+}
+
+const FORMS_SETUP_MSG = 'כדי לשלוח טופס ללקוח צריך להריץ פעם אחת את הקובץ supabase-forms.sql ב-Supabase (הסבר ב-README)';
+
+function randomToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function formWaMessage(q, link) {
+  return (state.settings.whatsapp?.formMessage || '{קישור}')
+    .replaceAll('{שם_לקוח}', q.customer?.name || '')
+    .replaceAll('{סוג_אירוע}', eventTypeLabel(q))
+    .replaceAll('{תאריך_אירוע}', eventDateShort(q) || '')
+    .replaceAll('{מספר_הצעה}', String(q.number ?? ''))
+    .replaceAll('{קישור}', link)
+    .replace(/[ \t]*\(\s*\)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function sendForm(q) {
+  if (state.formsError === 'no-table') return toast(FORMS_SETUP_MSG, 'error');
+  const existing = formOf(q);
+  if (existing?.loaded_at) return toast('הבחירה מהטופס כבר נטענה להזמנה', 'error');
+  // אותו קישור נשמר לאורך זמן; התוכן (תפריט, כמויות) מתעדכן בכל שליחה
+  const token = existing?.token || randomToken();
+  const logo = String(state.settings.images?.logo || '');
+  const data = formSnapshot(q, state.settings, {
+    date: eventDateShort(q),
+    eventType: eventTypeLabel(q),
+    logo: /^(https?:|assets\/)/.test(logo) ? logo : '',
+  });
+  busy(true, 'מכין את הטופס...');
+  try {
+    await state.store.saveForm(token, q.id, data);
+  } catch (err) {
+    if (err.code === 'no-forms') {
+      state.formsError = 'no-table';
+      return toast(FORMS_SETUP_MSG, 'error');
+    }
+    return toast('שגיאה בהכנת הטופס: ' + err.message, 'error');
+  } finally {
+    busy(false);
+  }
+  if (!existing) state.forms.push({ token, quote_id: q.id, submission: null, submitted_at: null, loaded_at: null, created_at: new Date().toISOString() });
+  refreshFormButtons(q);
+  const link = new URL(`form.html?t=${token}`, location.href.split('#')[0]).href;
+  openWaDialog({
+    title: `📝 טופס בחירת מנות – ${q.customer?.name || ''}`,
+    customer: q.customer,
+    message: () => formWaMessage(q, link),
+  });
+}
+
+// אחרי שליחה/טעינה – מעדכנים את הכפתורים בדף הנוכחי
+function refreshFormButtons(q) {
+  const v = $('#v-order');
+  if (v) v.innerHTML = orderLink(q) + formButtons(q);
+  if (location.hash.startsWith('#/orders')) renderOrders();
+}
+
+async function loadFromForm(q) {
+  busy(true, 'טוען את בחירת הלקוח...');
+  await loadForms();
+  busy(false);
+  const f = formOf(q);
+  if (!f?.submission) return toast('עדיין לא התקבלה בחירה מהלקוח', 'error');
+  if (orderOf(q)) return go(`#/order/${orderOf(q).id}`);
+  const o = orderFromSubmission(q, state.settings.menu, f.submission);
+  o.formToken = f.token;
+  state.pendingOrder = o;
+  go(`#/order-new/${q.id}`);
+}
+
+// הודעת בדיקה ישירות מהדפדפן ל-CallMeBot (התשובה עצמה לא קריאה – בודקים בוואטסאפ)
+function sendNotifyTest(n) {
+  let phone = normPhone(n?.phone);
+  if (phone.startsWith('0')) phone = '972' + phone.slice(1);
+  if (!phone || !String(n?.apikey || '').trim()) return toast('יש למלא טלפון ומפתח CallMeBot', 'error');
+  const text = encodeURIComponent('✅ בדיקה: התראות ממערכת PIZZA-BAR מוגדרות');
+  fetch(`https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${text}&apikey=${encodeURIComponent(n.apikey.trim())}`, { mode: 'no-cors' })
+    .then(() => toast('הבקשה נשלחה – בדקו שהגיעה הודעה בוואטסאפ (לפעמים לוקח דקה). אל תשכחו "שמירת הגדרות".'))
+    .catch((err) => toast('השליחה נכשלה: ' + err.message, 'error'));
 }
 
 // ---------- לקוחות ----------
@@ -2019,7 +2200,22 @@ async function renderSettings() {
       sec(
         '💬 הודעת וואטסאפ',
         `${field('נוסח ההודעה ללקוח', 'whatsapp.message', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}' })}
+        ${field('נוסח ההודעה עם טופס בחירת המנות', 'whatsapp.formMessage', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {קישור}' })}
         ${field('נוסח ההודעה לשליחת הזמנה', 'whatsapp.orderMessage', s, { type: 'textarea', rows: 6, hint: 'משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הזמנה} {סכום} {קישור}' })}`
+      ),
+      sec(
+        '🔔 התראה בוואטסאפ כשלקוח ממלא טופס מנות',
+        `<p class="hint">כשלקוח שולח את טופס בחירת המנות, נשלחת אליך הודעת וואטסאפ דרך השירות החינמי CallMeBot. הגדרה חד-פעמית:</p>
+        <ol class="hint steps-list">
+          <li>פותחים בטלפון את <a href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" rel="noopener">דף ההוראות של CallMeBot</a>, ושולחים בוואטסאפ את ההודעה שמופיעה שם למספר שלהם.</li>
+          <li>מקבלים מהם בוואטסאפ מפתח (apikey) – מעתיקים אותו לכאן, יחד עם מספר הטלפון שלך, ושומרים.</li>
+          <li>לוחצים "שליחת הודעת בדיקה" ומוודאים שהגיעה הודעה.</li>
+        </ol>
+        <div class="grid">
+          ${field('הטלפון שלך לקבלת התראות', 'notify.phone', s, { type: 'tel', dir: 'ltr', placeholder: '050-1234567' })}
+          ${field('מפתח CallMeBot (apikey)', 'notify.apikey', s, { dir: 'ltr', placeholder: '123456' })}
+        </div>
+        <button type="button" class="btn small ghost" data-act="notify-test">📨 שליחת הודעת בדיקה</button>`
       ),
       sec(
         'ברירות מחדל להצעה חדשה',
@@ -2112,6 +2308,7 @@ async function renderSettings() {
     else if (b.dataset.act === 'add-addon')
       s.addons.push({ id: 'a' + Date.now().toString(36), name: '', category: '', price: 0, unit: 'qty' });
     else if (b.dataset.act === 'add-feature') s.features.push({ title: '', text: '' });
+    else if (b.dataset.act === 'notify-test') return sendNotifyTest(s.notify);
     else return;
     markDirty();
     draw();

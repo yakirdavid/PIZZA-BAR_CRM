@@ -398,6 +398,28 @@ class SupabaseStore {
   async nextNumber(start) {
     return this._check(await this.sb.rpc('pb_next_number', { start_at: start }));
   }
+  // ---------- טופסי בחירת מנות ללקוח (ראו supabase-forms.sql) ----------
+  formsSupported = true;
+  _formsError(error) {
+    if (/pb_forms|PGRST205|42P01/.test(`${error.code} ${error.message}`)) return storeError('no-forms', error.message);
+    return new Error(error.message);
+  }
+  async listForms() {
+    const { data, error } = await this.sb
+      .from('pb_forms')
+      .select('token,quote_id,submission,submitted_at,loaded_at,created_at');
+    if (error) throw this._formsError(error);
+    return data;
+  }
+  // טופס אחד לכל הצעה: אם כבר קיים – מעדכנים את התוכן (למשל אחרי שינוי בתפריט) ושומרים על אותו קישור
+  async saveForm(token, quoteId, data) {
+    const { error } = await this.sb.from('pb_forms').upsert({ token, quote_id: quoteId, data }, { onConflict: 'token' });
+    if (error) throw this._formsError(error);
+  }
+  async markFormLoaded(token) {
+    const { error } = await this.sb.from('pb_forms').update({ loaded_at: new Date().toISOString() }).eq('token', token);
+    if (error) throw this._formsError(error);
+  }
   // אירועי ביקור מדף הנחיתה (ראו supabase-landing.sql). since: ISO או null לכל התקופה
   async listLandingEvents(since) {
     const out = [];

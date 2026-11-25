@@ -28,3 +28,29 @@ test('an order cannot be saved until all required dishes are chosen', () => {
   o.starters.push('ג');
   assert.deepEqual(orderProblems(o, req), []);
 });
+
+import { formSnapshot, orderFromSubmission } from '../js/order.js';
+
+test('form snapshot carries the required counts and the menu, hiding starters when none are needed', () => {
+  const snap = formSnapshot(quote(), DEFAULT_SETTINGS, { date: '20.12.2026' });
+  assert.deepEqual(snap.need, { pizzas: 5, starters: 4 });
+  assert.equal(snap.menu.pizzas.length, menu.pizzas.length);
+  assert.equal(snap.menu.starters.length, menu.starters.length);
+  assert.deepEqual(snap.preset.pizzas, ['מרגריטה', 'לא בתפריט']);
+  assert.deepEqual(formSnapshot(quote({ starterCount: 0 }), DEFAULT_SETTINGS).menu.starters, []);
+});
+
+test('a customer submission becomes an order with only valid dishes', () => {
+  const sub = {
+    pizzas: ['מרגריטה', 'בוראטה', 'מרגריטה', 'פיצה מומצאת'],
+    starters: ['כרובית על טחינה'],
+    desserts: ['מלבי'],
+    notes: ' בלי בצל ',
+  };
+  const o = orderFromSubmission(quote({ pizzaCount: 2 }), menu, sub);
+  assert.deepEqual(o.pizzas, ['מרגריטה', 'בוראטה']);
+  assert.deepEqual(o.starters, ['כרובית על טחינה']);
+  assert.deepEqual(o.desserts, ['מלבי']);
+  assert.equal(o.notes, 'בלי בצל');
+  assert.equal(o.quoteId, 'q1');
+});

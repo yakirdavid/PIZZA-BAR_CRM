@@ -368,3 +368,17 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .pick-count.ok { color: #1d6b35; }
 .pick-count.err { color: var(--danger); }
 .pick-group:has(.pick-count.err) .chips { outline: 2px solid rgba(179,38,30,.35); outline-offset: 6px; border-radius: 8px; }
+
+/* טופס בחירת מנות ללקוח */
+.pill.wait { background: #fff1dc; color: #8a5300; }
+.pill.soon { background: #fde8de; color: #9a3d1a; }
+.pill.muted { background: #eeeae4; color: #5c554e; }
+.waiting-item.soon { background: #fdf3ee; border: 1px solid #f3d6c8; }
+.waiting-info { display: flex; flex-direction: column; gap: 4px; }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pills:empty { display: none; }
+.waiting-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.from-form { background: #e2f3e6; color: #1d6b35; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-weight: 600; font-size: 14px; }
+.steps-list { margin: 0 0 10px; padding-inline-start: 20px; }
+.steps-list li { margin-bottom: 4px; }
+#v-order { display: contents; }

@@ -44,3 +44,43 @@ export function orderProblems(order, req) {
     out.push({ key: 'starters', msg: `יש לבחור ${req.starters} מנות ראשונות (נבחרו ${n('starters')})` });
   return out;
 }
+
+// ---------- טופס בחירת מנות ללקוח ----------
+// מה שהטופס הציבורי מציג. נשמר בטבלת הטפסים, כך שהלקוח לא צריך גישה לשום נתון אחר.
+export function formSnapshot(q, settings, { date = '', eventType = '', logo = '' } = {}) {
+  const req = orderRequirements(q, settings.menu);
+  const pick = (list) => (list || []).map(({ name, desc }) => ({ name, desc: desc || '' }));
+  return {
+    number: q.number,
+    name: q.customer?.name || '',
+    date,
+    eventType,
+    title: settings.business?.title || '',
+    contact: settings.business?.contact || '',
+    logo,
+    need: req,
+    menu: {
+      starters: req.starters ? pick(settings.menu?.starters) : [],
+      pizzas: pick(settings.menu?.pizzas),
+      desserts: pick(settings.menu?.desserts),
+    },
+    // מה שכבר נבחר בהצעה מסומן מראש בטופס
+    preset: { pizzas: (q.pizzas || []).slice(0, req.pizzas) },
+  };
+}
+
+// הזמנה חדשה מתוך בחירת הלקוח. רק מנות שקיימות בתפריט, ולא יותר מהכמות שנקבעה.
+export function orderFromSubmission(q, menu, sub) {
+  const o = newOrder(q, menu);
+  const req = orderRequirements(q, menu);
+  const keep = (names, list, max) => {
+    const valid = (list || []).map((x) => x.name);
+    const out = [...new Set((names || []).filter((n) => valid.includes(n)))];
+    return max == null ? out : out.slice(0, max);
+  };
+  o.pizzas = keep(sub?.pizzas, menu?.pizzas, req.pizzas);
+  o.starters = keep(sub?.starters, menu?.starters, req.starters);
+  o.desserts = keep(sub?.desserts, menu?.desserts);
+  o.notes = String(sub?.notes || '').trim();
+  return o;
+}
