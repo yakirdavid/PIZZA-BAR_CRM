@@ -2,7 +2,10 @@ import { createStore, isCloud } from './store.js';
 import { parseRequest } from './parse-request.js';
 import { DEFAULT_SETTINGS, STATUSES, clone, withDefaults } from './defaults.js';
 import { calcQuote, formatILS, formatGuests, formatDuration, fillTerms, pricingModeOf } from './pricing.js';
-import { ORDER_STATUSES, newOrder, orderRequirements, orderProblems, formSnapshot, orderFromSubmission } from './order.js';
+import {
+  ORDER_STATUSES, newOrder, orderRequirements, orderProblems, formSnapshot, orderFromSubmission,
+  parseMenuLine, menuLine, visibleItems, chosen, ensureFixed, OTHER_PREFIX, isOther,
+} from './order.js';
 import { esc, eventTypeLabel, guestsText, renderPages, buildOrderBlocks, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 import { renderLanding } from './landing-stats.js';
 
@@ -1659,46 +1662,76 @@ function renderOrderEditor(o, q) {
       ${o.id ? `<div class="grid">${field('סטטוס ההזמנה', 'status', o, { options: ORDER_STATUSES.map((x) => [x.id, x.label]) })}</div>` : ''}
     </form>`;
 
+  ensureFixed(o, req);
   const groups = [
-    { key: 'pizzas', title: 'פיצות', list: s.menu.pizzas, need: req.pizzas },
+    { key: 'pizzas', title: 'פיצות', list: s.menu.pizzas, need: req.pizzas, other: true },
     { key: 'starters', title: 'ראשונות וסלטים', list: s.menu.starters, need: req.starters },
     { key: 'desserts', title: 'קינוחים', list: s.menu.desserts, need: 0, optional: true },
-  ].filter((g) => g.need > 0 || (g.optional && g.list?.length) || o[g.key]?.length);
+  ].filter((g) => g.need > 0 || (g.optional && visibleItems(g.list).length) || o[g.key]?.length);
 
+  const fixedOf = (g) => req.fixed?.[g.key] || [];
   const countText = (g) => {
-    const n = (o[g.key] || []).length;
-    if (!g.need) return `רשות · נבחרו ${n}`;
-    return n === g.need ? `✓ נבחרו ${n} מתוך ${g.need}` : `נבחרו ${n} מתוך ${g.need}`;
+    const n = chosen(o, req, g.key).length;
+    const plus = fixedOf(g).length ? ` (בנוסף ל${fixedOf(g).join(', ')})` : '';
+    if (!g.need) return `רשות · נבחרו ${n}${plus}`;
+    return `${n === g.need ? '✓ ' : ''}נבחרו ${n} מתוך ${g.need}${plus}`;
   };
   const countState = (g) => {
     if (!g.need) return '';
-    const n = (o[g.key] || []).length;
-    return n === g.need ? 'ok' : tried ? 'err' : '';
+    return chosen(o, req, g.key).length === g.need ? 'ok' : tried ? 'err' : '';
   };
 
   const drawPicks = () => {
     $('#o-picks').innerHTML = groups
       .map((g) => {
-        const names = (g.list || []).map((x) => x.name);
-        const extra = (o[g.key] || []).filter((n) => !names.includes(n)); // מנה שהוסרה מהתפריט
+        const items = visibleItems(g.list);
+        const names = items.map((x) => x.name);
+        const extra = (o[g.key] || []).filter((n) => !names.includes(n)); // "אחר" או מנה שהוסרה מהתפריט
         return `<section class="pick-group" data-group="${g.key}">
           <h2>${esc(g.title)}${g.need ? ` – יש לבחור ${g.need} *` : ' (רשות)'}</h2>
           <p class="pick-count ${countState(g)}" data-count="${g.key}">${countText(g)}</p>
           <div class="chips">
             ${[...names, ...extra]
               .map((n) => {
-                const d = (g.list || []).find((x) => x.name === n)?.desc;
-                return `<label class="chip" ${d ? `title="${esc(d)}"` : ''}><input type="checkbox" data-pick="${g.key}" value="${esc(n)}" ${
+                const it = items.find((x) => x.name === n);
+                const fixed = fixedOf(g).includes(n);
+                return `<label class="chip ${fixed ? 'fixed' : ''}" ${it?.desc ? `title="${esc(it.desc)}"` : ''}><input type="checkbox" data-pick="${g.key}" value="${esc(n)}" ${
                   (o[g.key] || []).includes(n) ? 'checked' : ''
-                }> ${esc(n)}</label>`;
+                } ${fixed ? 'disabled' : ''}> ${esc(n)}${fixed ? ' 🔒' : ''}${it?.note ? ` <small class="chip-note">${esc(it.note)}</small>` : ''}</label>`;
               })
               .join('')}
           </div>
+          ${
+            g.other
+              ? `<div class="other-add"><input type="text" id="other-${g.key}" placeholder="פיצה שתואמה בנפרד (אחר)" maxlength="80">
+                  <button type="button" class="btn small ghost" data-add-other="${g.key}">+ הוספת "אחר"</button></div>`
+              : ''
+          }
         </section>`;
       })
       .join('');
   };
   drawPicks();
+
+  const refreshCount = (g) => {
+    const cnt = $(`[data-count="${g.key}"]`, form);
+    cnt.textContent = countText(g);
+    cnt.className = `pick-count ${countState(g)}`;
+  };
+  // פיצה "אחר" – תואמה בנפרד ולא מופיעה בתפריט; נספרת בכמות
+  $('#o-picks').addEventListener('click', (e) => {
+    const key = e.target.closest('[data-add-other]')?.dataset.addOther;
+    if (!key) return;
+    const g = groups.find((x) => x.key === key);
+    const input = $(`#other-${key}`);
+    const text = input.value.trim();
+    if (!text) return toast('כתבו איזו פיצה תואמה', 'error');
+    if (chosen(o, req, key).length >= g.need) return toast(`כבר נבחרו ${g.need} ב${g.title}. בטלו קודם בחירה אחרת.`, 'error');
+    const name = OTHER_PREFIX + text;
+    if (!(o[key] || []).includes(name)) o[key] = [...(o[key] || []), name];
+    state.dirty = true;
+    drawPicks();
+  });
 
   const form = $('#oform');
   bindForm(form, o, () => (state.dirty = true));
@@ -1707,18 +1740,16 @@ function renderOrderEditor(o, q) {
     const key = el.dataset.pick;
     if (!key) return;
     const g = groups.find((x) => x.key === key);
+    // שומרים לפי סדר התפריט, כדי שההדפסה תהיה מסודרת (מנות קבועות מסומנות ונעולות)
     const picked = $$(`[data-pick="${key}"]:checked`, form).map((x) => x.value);
-    if (g.need && picked.length > g.need) {
+    if (g.need && chosen({ [key]: picked }, req, key).length > g.need) {
       el.checked = false;
       toast(`ניתן לבחור עד ${g.need} ב${g.title}. כדי להחליף מנה – בטלו קודם בחירה אחרת.`, 'error');
       return;
     }
-    // שומרים לפי סדר התפריט, כדי שההדפסה תהיה מסודרת
     o[key] = picked;
     state.dirty = true;
-    const cnt = $(`[data-count="${key}"]`, form);
-    cnt.textContent = countText(g);
-    cnt.className = `pick-count ${countState(g)}`;
+    refreshCount(g);
   });
 
   async function save(thenView) {
@@ -2058,12 +2089,8 @@ async function fileToDataUrl(file, maxSide, asPng) {
 async function renderSettings() {
   const s = clone(state.settings);
   const imgs = await resolveImages(s.images);
-  const linesOf = (arr) => arr.map((x) => (x.desc ? `${x.name} | ${x.desc}` : x.name)).join('\n');
-  const parseLines = (t) =>
-    t.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-      const [name, ...d] = l.split('|');
-      return { name: name.trim(), desc: d.join('|').trim() };
-    });
+  const linesOf = (arr) => arr.map(menuLine).join('\n');
+  const parseLines = (t) => t.split('\n').map((l) => l.trim()).filter(Boolean).map(parseMenuLine);
 
   const sec = (title, body, open = false) => `<details class="card set-sec" ${open ? 'open' : ''}><summary>${title}</summary><div class="set-body">${body}</div></details>`;
 
@@ -2196,7 +2223,8 @@ async function renderSettings() {
       ),
       sec(
         'תפריט',
-        `<p class="hint">שורה לכל מנה, בפורמט: שם | תיאור</p>
+        `<p class="hint">שורה לכל מנה, בפורמט: שם | תיאור | סימון (רשות).<br>
+          סימון: <b>קבוע</b> – כלולה תמיד, מסומנת מראש בטופס ללקוח ואי אפשר לבטל (לא נספרת בכמות לבחירה) · <b>מוסתר</b> – לא מוצגת בטופס ללקוח · כל טקסט אחר – הערה בולטת ליד המנה, למשל: מלבי | מלבי שמנת | בתוספת 10 ₪ לאדם</p>
         <div class="grid">
           <label class="field span2"><span>פיצות</span><textarea data-menu="pizzas" rows="9">${esc(linesOf(s.menu.pizzas))}</textarea></label>
           <label class="field"><span>ראשונות וסלטים</span><textarea data-menu="starters" rows="8">${esc(linesOf(s.menu.starters))}</textarea></label>

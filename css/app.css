@@ -383,3 +383,7 @@ table.quotes { width: 100%; border-collapse: collapse; background: #fff; border:
 .steps-list li { margin-bottom: 4px; }
 #v-order { display: contents; }
 .icon.form-ready { background: #e2f3e6; border-radius: 8px; }
+.chip.fixed { background: #f3f0e8; border-style: dashed; cursor: default; }
+.chip-note { color: var(--accent); font-weight: 700; }
+.other-add { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.other-add input { flex: 1; min-width: 200px; }

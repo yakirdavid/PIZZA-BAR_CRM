@@ -51,6 +51,16 @@ function header(d) {
   </header>`;
 }
 
+// לסיכום: המנות הקבועות + מה שהלקוח בחר
+function withFixed(d, sub) {
+  const out = { ...(sub || {}) };
+  for (const g of GROUPS) {
+    const fixed = (d.menu?.[g.key] || []).filter((x) => x.fixed).map((x) => x.name);
+    out[g.key] = [...fixed, ...(sub?.[g.key] || [])];
+  }
+  return out;
+}
+
 function summary(d, sub) {
   return GROUPS.map((g) => {
     const names = sub?.[g.key] || [];
@@ -58,19 +68,40 @@ function summary(d, sub) {
   }).join('') + (sub?.notes ? `<h3>הערות</h3><p>${esc(sub.notes)}</p>` : '');
 }
 
+const OTHER_PREFIX = 'אחר: ';
+
 function renderForm(form) {
   const d = form.data;
   const need = d.need || {};
+  // ראשונות מוצגות רק כשיש מנות ראשונות בהצעה (אירוע מלא); קינוחים – רשות
   const groups = GROUPS.filter((g) => (d.menu?.[g.key] || []).length && (g.optional || need[g.key] > 0));
+  const fixed = Object.fromEntries(groups.map((g) => [g.key, d.menu[g.key].filter((x) => x.fixed).map((x) => x.name)]));
   const start = form.submission || d.preset || {};
+  const otherStart = (start.pizzas || []).find((n) => String(n).startsWith(OTHER_PREFIX));
   const picked = Object.fromEntries(
     groups.map((g) => {
-      const valid = d.menu[g.key].map((x) => x.name);
+      const valid = d.menu[g.key].filter((x) => !x.fixed).map((x) => x.name);
       const list = (start[g.key] || []).filter((n) => valid.includes(n));
       return [g.key, g.optional ? list : list.slice(0, need[g.key])];
     })
   );
   let tried = false;
+
+  const item = (g, it) => `<label class="item ${it.fixed ? 'fixed' : ''}">
+      <input type="checkbox" data-key="${g.key}" value="${esc(it.name)}" ${it.fixed || picked[g.key].includes(it.name) ? 'checked' : ''} ${it.fixed ? 'disabled' : ''}>
+      <span class="box" aria-hidden="true"></span>
+      <span class="txt"><b>${esc(it.name)}${it.fixed ? ' <span class="incl">כלול 🔒</span>' : ''}</b>${it.desc ? `<small>${esc(it.desc)}</small>` : ''}${
+        it.note ? `<span class="price-note">${esc(it.note)}</span>` : ''
+      }</span>
+    </label>`;
+  const otherItem = (g) => `<div class="item other ${otherStart ? 'on' : ''}">
+      <label class="other-row">
+        <input type="checkbox" data-key="${g.key}" data-other ${otherStart ? 'checked' : ''}>
+        <span class="box" aria-hidden="true"></span>
+        <span class="txt"><b>אחר</b><small>פיצה שתואמה איתנו בנפרד ולא מופיעה בתפריט</small></span>
+      </label>
+      <input type="text" id="other-text" maxlength="80" placeholder="איזו פיצה תואמה?" value="${esc(otherStart ? otherStart.slice(OTHER_PREFIX.length) : '')}">
+    </div>`;
 
   app.innerHTML = `
     ${header(d)}
@@ -85,15 +116,8 @@ function renderForm(form) {
           <h2>${esc(g.title)}</h2>
           <p class="need" data-need="${g.key}"></p>
           <div class="items">
-            ${d.menu[g.key]
-              .map(
-                (it) => `<label class="item">
-                  <input type="checkbox" data-key="${g.key}" value="${esc(it.name)}" ${picked[g.key].includes(it.name) ? 'checked' : ''}>
-                  <span class="box" aria-hidden="true"></span>
-                  <span class="txt"><b>${esc(it.name)}</b>${it.desc ? `<small>${esc(it.desc)}</small>` : ''}</span>
-                </label>`
-              )
-              .join('')}
+            ${d.menu[g.key].map((it) => item(g, it)).join('')}
+            ${g.key === 'pizzas' && d.allowOther?.pizzas ? otherItem(g) : ''}
           </div>
         </section>`
       )
@@ -108,10 +132,16 @@ function renderForm(form) {
       <button id="send" class="btn">שליחת הבחירה</button>
     </div>`;
 
+  // הבחירה הנוכחית בקטגוריה (בלי המנות הקבועות); "אחר" נשמר כ"אחר: <תיאור>"
+  const read = (key) =>
+    $$(`[data-key="${key}"]:checked:not([disabled])`).map((x) => (x.hasAttribute('data-other') ? OTHER_PREFIX + $('#other-text').value.trim() : x.value));
+  for (const g of groups) picked[g.key] = read(g.key);
+
+  const plus = (g) => (fixed[g.key].length ? ` (בנוסף ל${fixed[g.key].join(' ול')}, שכלול תמיד)` : '');
   const needText = (g) => {
     const n = picked[g.key].length;
-    if (g.optional) return n ? `רשות · נבחרו ${n}` : 'רשות – אפשר לבחור או לדלג';
-    return n === need[g.key] ? `✓ נבחרו ${n} מתוך ${need[g.key]}` : `יש לבחור ${need[g.key]} ${g.word} · נבחרו ${n}`;
+    if (g.optional) return `רשות${n ? ` · נבחרו ${n}` : ''}${fixed[g.key].length ? ` · ${fixed[g.key].join(' ו')} כלול תמיד` : ''}`;
+    return n === need[g.key] ? `✓ נבחרו ${n} מתוך ${need[g.key]}${plus(g)}` : `יש לבחור ${need[g.key]} ${g.word}${plus(g)} · נבחרו ${n}`;
   };
   const complete = (g) => g.optional || picked[g.key].length === need[g.key];
   const draw = () => {
@@ -122,9 +152,7 @@ function renderForm(form) {
       $(`[data-group="${g.key}"]`).classList.toggle('missing', tried && !complete(g));
     }
     const left = groups.filter((g) => !complete(g));
-    $('#status').textContent = left.length
-      ? left.map((g) => `${g.title}: ${picked[g.key].length}/${need[g.key]}`).join(' · ')
-      : '✓ הכול נבחר';
+    $('#status').textContent = left.length ? left.map((g) => `${g.title}: ${picked[g.key].length}/${need[g.key]}`).join(' · ') : '✓ הכול נבחר';
     $('#status').className = left.length ? '' : 'ok';
   };
   draw();
@@ -134,23 +162,37 @@ function renderForm(form) {
     const key = el.dataset.key;
     if (!key) return;
     const g = groups.find((x) => x.key === key);
-    const now = $$(`[data-key="${key}"]:checked`).map((x) => x.value);
+    const now = read(key);
     if (!g.optional && now.length > need[key]) {
       el.checked = false;
       flash(`אפשר לבחור עד ${need[key]} ${g.word}. כדי להחליף – בטלו קודם בחירה אחרת.`);
       return;
     }
+    if (el.hasAttribute('data-other')) {
+      el.closest('.other').classList.toggle('on', el.checked);
+      if (el.checked) $('#other-text').focus();
+    }
     picked[key] = now;
     draw();
+  });
+  // הקלדה בשדה "אחר" מעדכנת את הבחירה
+  $('#other-text')?.addEventListener('input', () => {
+    picked.pizzas = read('pizzas');
   });
 
   $('#send').addEventListener('click', async () => {
     tried = true;
+    picked.pizzas && (picked.pizzas = read('pizzas'));
     draw();
     const missing = groups.find((g) => !complete(g));
     if (missing) {
       flash(`עוד לא הושלמה הבחירה: ${needText(missing)}`);
       $(`[data-group="${missing.key}"]`).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if ($('[data-other]:checked') && !$('#other-text').value.trim()) {
+      flash('סימנתם "אחר" בפיצות – כתבו איזו פיצה תואמה');
+      $('#other-text').focus();
       return;
     }
     const btn = $('#send');
@@ -159,13 +201,14 @@ function renderForm(form) {
     const choice = { pizzas: picked.pizzas || [], starters: picked.starters || [], desserts: picked.desserts || [], notes: $('#notes').value.trim() };
     try {
       await rpc('pb_submit_form', { form_token: token, choice });
+      const shown = Object.fromEntries(GROUPS.map((g) => [g.key, [...(fixed[g.key] || []), ...(choice[g.key] || [])]]));
       app.innerHTML = `${header(d)}
         <section class="card center thanks">
           <div class="big">🎉</div>
           <h1>תודה ${esc(d.name)}!</h1>
           <p>הבחירה שלכם התקבלה. נעבור עליה ונשלח לכם אישור הזמנה מסודר.</p>
         </section>
-        <section class="card">${summary(d, choice)}</section>`;
+        <section class="card">${summary(d, { ...shown, notes: choice.notes })}</section>`;
       window.scrollTo(0, 0);
     } catch (err) {
       btn.disabled = false;
@@ -203,7 +246,7 @@ async function start() {
     app.innerHTML = `${header(form.data)}
       <section class="card center"><h1>הבחירה כבר התקבלה ✓</h1>
         <p>הבחירה שלכם אושרה ועברה להכנה. לשינויים צרו איתנו קשר${form.data.contact ? `: ${esc(form.data.contact)}` : '.'}</p></section>
-      <section class="card">${summary(form.data, form.submission)}</section>`;
+      <section class="card">${summary(form.data, withFixed(form.data, form.submission))}</section>`;
     return;
   }
   renderForm(form);

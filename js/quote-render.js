@@ -339,15 +339,14 @@ export function buildOrderBlocks(q, images, order, menu = {}) {
     </div>`);
   add(detailsHtml(q, s, totalMinutes, guests));
 
-  const desc = (list, name) => (list || []).find((x) => x.name === name)?.desc || '';
   const group = (title, names, list) =>
     names?.length
       ? `<div class="q-order-group">
           <h3>${esc(title)} <small>(${names.length})</small></h3>
           <ul>${names
             .map((n) => {
-              const d = desc(list, n);
-              return `<li><b>${esc(n)}</b>${d ? `<span>${esc(d)}</span>` : ''}</li>`;
+              const it = (list || []).find((x) => x.name === n);
+              return `<li><b>${esc(n)}</b>${it?.desc ? `<span>${esc(it.desc)}</span>` : ''}${it?.note ? `<em>${esc(it.note)}</em>` : ''}</li>`;
             })
             .join('')}</ul>
         </div>`

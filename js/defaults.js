@@ -9,7 +9,7 @@ export const STATUSES = [
 ];
 
 export const DEFAULT_SETTINGS = {
-  schema: 3,
+  schema: 4,
   numbering: { start: 1001 },
   business: {
     name: 'PIZZA-BAR בטאבון',
@@ -126,7 +126,7 @@ export const DEFAULT_SETTINGS = {
       { name: 'סלט עלים קראנץ׳ ופטה', desc: 'ויניגרט הדרים, קראנץ׳ בטטה וגבינת פטה מגורדת' },
       { name: 'סלט פנצנלה', desc: 'עגבניות שרי, מוצרלה פרסקה, בזיליקום, קרעי פוקאצ׳ה, שמן זית, חומץ בלסמי ופסטו' },
       { name: 'אנטיפסטי', desc: 'בטטה, גמבה, גזר, כרוב, שום ובצל בתיבול שמן זית ומלח גס' },
-      { name: 'פוקאצ׳ה', desc: 'לחם איטלקי בטאבון, שום קונפי, שמן זית ומלח גס' },
+      { name: 'פוקאצ׳ה', desc: 'לחם איטלקי בטאבון, שום קונפי, שמן זית ומלח גס', fixed: true },
     ],
     pizzas: [
       { name: 'מרגריטה', desc: 'רוטב עגבניות, מוצרלה ובזיליקום טרי' },
@@ -140,9 +140,9 @@ export const DEFAULT_SETTINGS = {
       { name: 'פיצה פולנטה', desc: 'קרם תירס, מוצרלה, פטריות פורטובלו, פרמז׳ן ובזיליקום טרי' },
     ],
     desserts: [
-      { name: 'קלצונה נוטלה', desc: 'הבצק שלנו, נוטלה, גבינת מסקרפונה ואבקת סוכר' },
-      { name: 'פיצה שחיתות', desc: 'הבצק שלנו, נוטלה, פינוקי שוקולד וחלבה' },
-      { name: 'מלבי', desc: 'מלבי שמנת, מי ורדים, קוקוס, בוטנים מסוכרים ופיסטוק' },
+      { name: 'קלצונה נוטלה', desc: 'הבצק שלנו, נוטלה, גבינת מסקרפונה ואבקת סוכר', fixed: true },
+      { name: 'פיצה שחיתות', desc: 'הבצק שלנו, נוטלה, פינוקי שוקולד וחלבה', hidden: true },
+      { name: 'מלבי', desc: 'מלבי שמנת, מי ורדים, קוקוס, בוטנים מסוכרים ופיסטוק', note: 'בתוספת 10 ₪ לאדם' },
     ],
   },
 };
@@ -172,6 +172,22 @@ export function withDefaults(saved) {
     // גרסה 3: מספר מנות ראשונות לבחירה לכל מסלול
     out.packages = out.packages.map((p) => ({ ...p, starterCount: p.starterCount ?? (p.id === 'full' ? 4 : 0) }));
     out.schema = 3;
+  }
+  if (out.schema < 4) {
+    // גרסה 4: מנות קבועות / מוסתרות / עם הערה בתפריט (לטופס בחירת המנות ולהזמנה)
+    const norm = (n) => String(n || '').replace(/[׳'’`]/g, "'").trim();
+    const mark = (list, name, extra) =>
+      (list || []).map((x) => (norm(x.name) === norm(name) && !('fixed' in x || 'hidden' in x || 'note' in x) ? { ...x, ...extra } : x));
+    out.menu = {
+      ...out.menu,
+      starters: mark(out.menu.starters, 'פוקאצ׳ה', { fixed: true }),
+      desserts: mark(
+        mark(mark(out.menu.desserts, 'קלצונה נוטלה', { fixed: true }), 'פיצה שחיתות', { hidden: true }),
+        'מלבי',
+        { note: 'בתוספת 10 ₪ לאדם' }
+      ),
+    };
+    out.schema = 4;
   }
   return out;
 }
