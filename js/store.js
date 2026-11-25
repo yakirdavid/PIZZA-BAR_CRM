@@ -420,6 +420,12 @@ class SupabaseStore {
     const { error } = await this.sb.from('pb_forms').update({ loaded_at: new Date().toISOString() }).eq('token', token);
     if (error) throw this._formsError(error);
   }
+  // פתיחת הטופס מחדש (למשל אחרי שההזמנה שנוצרה ממנו נמחקה). clear – מאפסים גם את הבחירה, למילוי מחדש
+  async reopenForm(token, { clear = false } = {}) {
+    const patch = { loaded_at: null, ...(clear ? { submission: null, submitted_at: null } : {}) };
+    const { error } = await this.sb.from('pb_forms').update(patch).eq('token', token);
+    if (error) throw this._formsError(error);
+  }
   // אירועי ביקור מדף הנחיתה (ראו supabase-landing.sql). since: ISO או null לכל התקופה
   async listLandingEvents(since) {
     const out = [];

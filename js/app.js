@@ -1488,6 +1488,16 @@ async function deleteOrder(o) {
   if (!confirm(`למחוק את הזמנה ${o.number}? ההצעה עצמה לא תימחק, ואפשר יהיה ליצור ממנה הזמנה חדשה.`)) return;
   await state.store.deleteOrder(o.id);
   state.orders = state.orders.filter((x) => x.id !== o.id);
+  // הטופס שממנו נוצרה ההזמנה נפתח מחדש: אפשר לטעון שוב את הבחירה, והלקוח יכול לעדכן אותה
+  const f = state.forms.find((x) => x.quote_id === o.quoteId);
+  if (f?.loaded_at && state.store.reopenForm) {
+    try {
+      await state.store.reopenForm(f.token);
+      f.loaded_at = null;
+    } catch (err) {
+      toast('ההזמנה נמחקה, אבל פתיחת טופס המנות מחדש נכשלה: ' + err.message, 'error');
+    }
+  }
   toast('ההזמנה נמחקה');
   go('#/orders');
 }
@@ -1875,7 +1885,7 @@ const daysUntil = (q) => {
 function formState(q) {
   const f = formOf(q);
   if (!f) return 'none';
-  if (f.loaded_at) return 'loaded';
+  if (f.loaded_at && orderOf(q)) return 'loaded';
   if (f.submitted_at) return 'submitted';
   return 'sent';
 }
@@ -1942,7 +1952,18 @@ function formWaMessage(q, link) {
 async function sendForm(q) {
   if (state.formsError === 'no-table') return toast(FORMS_SETUP_MSG, 'error');
   const existing = formOf(q);
-  if (existing?.loaded_at) return toast('הבחירה מהטופס כבר נטענה להזמנה', 'error');
+  if (existing?.loaded_at && orderOf(q)) return toast('הבחירה מהטופס כבר נטענה להזמנה', 'error');
+  if (existing?.loaded_at) {
+    // ההזמנה שנוצרה מהטופס נמחקה – פותחים את אותו קישור למילוי מחדש, בלי הבחירה הקודמת
+    try {
+      await state.store.reopenForm(existing.token, { clear: true });
+      Object.assign(existing, { loaded_at: null, submission: null, submitted_at: null });
+    } catch (err) {
+      return toast('פתיחת הטופס מחדש נכשלה: ' + err.message, 'error');
+    }
+  } else if (existing?.submitted_at && !confirm('הלקוח כבר מילא את הטופס. לשלוח אותו שוב? הלקוח יראה את הבחירה שלו ויוכל לעדכן אותה.')) {
+    return;
+  }
   // אותו קישור נשמר לאורך זמן; התוכן (תפריט, כמויות) מתעדכן בכל שליחה
   const token = existing?.token || randomToken();
   const logo = String(state.settings.images?.logo || '');
