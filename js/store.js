@@ -426,6 +426,11 @@ class SupabaseStore {
     const { error } = await this.sb.from('pb_forms').update(patch).eq('token', token);
     if (error) throw this._formsError(error);
   }
+  // ביטול טופס (למשל נשלח בטעות או לבדיקה) – הקישור מפסיק לעבוד
+  async deleteForm(token) {
+    const { error } = await this.sb.from('pb_forms').delete().eq('token', token);
+    if (error) throw this._formsError(error);
+  }
   // אירועי ביקור מדף הנחיתה (ראו supabase-landing.sql). since: ISO או null לכל התקופה
   async listLandingEvents(since) {
     const out = [];

@@ -104,6 +104,33 @@ export const DEFAULT_SETTINGS = {
     'תנאי הביטול כפופים לדין החל.',
   ],
   internal: { costPerGuest: 0, fixedCost: 0, commissionPercent: 0 },
+  // תחזית הוצאות לאירוע – ערכים לדוגמה, יש לעדכן במסך ההגדרות
+  expenses: {
+    partners: ['יקיר', 'טבע'], // הרווח מתחלק שווה בשווה ביניהם
+    setupHours: 3, // שעות עבודה מעבר לזמן ההגשה: נסיעה, הקמה ופירוק
+    staff: [
+      { name: 'פיצאיולים', count: 2, rate: 60, type: 'hour' },
+      { name: 'עובד/ת הגשה', count: 1, rate: 50, type: 'hour' },
+    ],
+    foodPerGuest: 25, // עלות חומרי גלם לאורח, כשאין מחירים ברשימת הקניות
+    fuel: { distanceKm: 30, kmPerLiter: 10, pricePerLiter: 7.5 },
+    gas: { ovens: 4, kgPerHourPerOven: 0.7, preheatHours: 1, cylinderKg: 12, cylinderPrice: 280 },
+    other: [{ name: 'כלים חד פעמיים', amount: 1.5, per: 'guest' }],
+  },
+  // רשימת קניות: כמויות לאירוע לפי מספר האורחים והמנות שנבחרו – ערכים לדוגמה, יש לעדכן
+  shopping: [
+    { name: 'קמח 00', category: 'בצק', unit: 'ק״ג', qty: 0.2, per: 'guest', dish: '', price: 6 },
+    { name: 'שמרים יבשים', category: 'בצק', unit: 'ק״ג', qty: 0.1, per: 'event', dish: '', price: 40 },
+    { name: 'רוטב עגבניות', category: 'רטבים', unit: 'ק״ג', qty: 0.08, per: 'guest', dish: '', price: 10 },
+    { name: 'מוצרלה', category: 'גבינות', unit: 'ק״ג', qty: 0.12, per: 'guest', dish: '', price: 40 },
+    { name: 'גבינת בורטה', category: 'גבינות', unit: 'יח׳', qty: 0.3, per: 'share', dish: 'בוראטה', price: 12 },
+    { name: 'פטריות פורטובלו', category: 'ירקות', unit: 'ק״ג', qty: 0.06, per: 'share', dish: 'פיצה פולנטה', price: 30 },
+    { name: 'בזיליקום טרי', category: 'ירקות', unit: 'חבילה', qty: 2, per: 'event', dish: '', price: 8 },
+    { name: 'שמן זית', category: 'מזווה', unit: 'בקבוק', qty: 1, per: 'event', dish: '', price: 40 },
+    { name: 'נוטלה', category: 'קינוחים', unit: 'ק״ג', qty: 0.03, per: 'guest', dish: 'קלצונה נוטלה', price: 45 },
+    { name: 'מסקרפונה', category: 'קינוחים', unit: 'ק״ג', qty: 0.02, per: 'guest', dish: 'קלצונה נוטלה', price: 40 },
+    { name: 'מגשי הגשה חד פעמיים', category: 'ציוד', unit: 'חבילה', qty: 0.05, per: 'guest', dish: '', price: 15 },
+  ],
   // התראה בוואטסאפ לבעל העסק כשלקוח שולח טופס מנות (CallMeBot – ראו README)
   notify: { phone: '', apikey: '' },
   // הודעת וואטסאפ – משתנים: {שם_לקוח} {סוג_אירוע} {תאריך_אירוע} {מספר_הצעה} {סכום} {קישור}
@@ -156,7 +183,7 @@ export function withDefaults(saved) {
   const d = clone(DEFAULT_SETTINGS);
   if (!saved) return d;
   const out = { ...d, ...saved };
-  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu', 'quoteDefaults', 'whatsapp', 'notify']) {
+  for (const k of ['numbering', 'business', 'images', 'ageGroups', 'extension', 'deposit', 'cancellation', 'pasta', 'internal', 'menu', 'quoteDefaults', 'whatsapp', 'notify', 'expenses']) {
     out[k] = { ...d[k], ...(saved[k] || {}) };
   }
   if ((saved.schema || 1) < 2) {

@@ -8,6 +8,7 @@ import {
 } from './order.js';
 import { esc, eventTypeLabel, guestsText, renderPages, buildOrderBlocks, pagesToPdfBlob, renderStageCanvases, saveBlob, addMinutes, HEB_MONTHS, eventDateKey, eventDateShort } from './quote-render.js';
 import { renderLanding } from './landing-stats.js';
+import { eventProfit, shoppingList, PER_OPTIONS } from './expenses.js';
 
 // ---------- עזרים ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -101,6 +102,7 @@ const state = {
   forms: [], // טופסי בחירת מנות שנשלחו ללקוחות (רק עם Supabase)
   formsError: null,
   orderFilter: { q: '', status: '', sort: 'event' },
+  financeFilter: { period: 'upcoming' },
   landingRange: '30',
 };
 const images = {}; // ref → url
@@ -160,7 +162,7 @@ async function route() {
   lastHash = location.hash;
   $$('.modal-back').forEach((m) => m.remove()); // חלון פתוח (למשל וואטסאפ) נסגר במעבר דף
   const [, page, id] = (location.hash || '#/').split('/');
-  const navPage = page?.startsWith('order') ? 'orders' : page || 'list';
+  const navPage = page?.startsWith('order') ? 'orders' : page === 'shopping' ? 'finance' : page || 'list';
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === navPage));
   window.scrollTo(0, 0);
   try {
@@ -200,6 +202,12 @@ async function route() {
       const q = quoteOf(o);
       if (!o || !q) return notFound();
       return page === 'order' ? renderOrderView(o, q) : renderOrderEditor(clone(o), q);
+    }
+    if (page === 'finance' || page === 'shopping') {
+      if (!id) return page === 'finance' ? renderFinance() : go('#/finance');
+      const q = state.quotes.find((x) => x.id === id);
+      if (!q) return notFound();
+      return page === 'finance' ? renderEventFinance(q) : renderShopping(q);
     }
     if (page === 'customers') return renderCustomers();
     if (page === 'settings') return renderSettings();
@@ -1283,6 +1291,7 @@ async function renderView(q) {
         <button class="btn ghost" id="v-pdf">⬇ הורדת PDF</button>
         <button class="btn primary wa-main" id="v-wa">💬 שליחה בוואטסאפ</button>
         <span id="v-order">${orderLink(q)}${formButtons(q)}</span>
+        <a class="btn ghost" href="#/finance/${q.id}" title="תחזית הוצאות ורווח מהאירוע">💰 רווח</a>
         <button class="btn ghost danger" id="v-del">🗑</button>
       </div>
     </div>
@@ -1816,6 +1825,8 @@ async function renderOrderView(o, q) {
         ${orderStatusSelect(o, 'o-status')}
         <a class="btn ghost" href="#/order-edit/${o.id}">✎ עריכת המנות</a>
         <a class="btn ghost" href="#/view/${q.id}">📄 הצעה ${esc(q.number)}</a>
+        <a class="btn ghost" href="#/shopping/${q.id}">🛒 רשימת קניות</a>
+        <a class="btn ghost" href="#/finance/${q.id}">💰 רווח</a>
         <button class="btn ghost" id="o-print">🖨 הדפסה</button>
         <button class="btn ghost" id="o-pdf">⬇ הורדת PDF</button>
         <button class="btn primary wa-main" id="o-wa">💬 שליחה ללקוח</button>
@@ -1911,8 +1922,25 @@ function formButtons(q, small = false) {
   const cls = small ? 'btn small' : 'btn';
   return (
     (st === 'submitted' ? `<button type="button" class="${cls} order-btn" data-act="load-form">📥 טעינת בחירת הלקוח</button>` : '') +
-    `<button type="button" class="${cls} ghost" data-act="send-form">📝 ${st === 'none' ? 'שליחת טופס מנות' : 'שליחת הטופס שוב'}</button>`
+    `<button type="button" class="${cls} ghost" data-act="send-form">📝 ${st === 'none' ? 'שליחת טופס מנות' : 'שליחת הטופס שוב'}</button>` +
+    (st === 'sent' || st === 'submitted' ? `<button type="button" class="${cls} ghost" data-act="cancel-form" title="ביטול הטופס – למשל אם נשלח לבדיקה">↩ ביטול הטופס</button>` : '')
   );
+}
+
+// ביטול טופס שנשלח (בדיקה / טעות): ההצעה חוזרת למצב "לא נשלח טופס" והקישור מפסיק לעבוד
+async function cancelForm(q) {
+  const f = formOf(q);
+  if (!f) return;
+  const what = f.submitted_at ? 'הטופס והבחירה שהלקוח מילא יימחקו' : 'הקישור שנשלח יפסיק לעבוד';
+  if (!confirm(`לבטל את טופס המנות של ${q.customer?.name || 'הלקוח'}? ${what}.`)) return;
+  try {
+    await state.store.deleteForm(f.token);
+  } catch (err) {
+    return toast('ביטול הטופס נכשל: ' + err.message, 'error');
+  }
+  state.forms = state.forms.filter((x) => x.token !== f.token);
+  toast('הטופס בוטל');
+  refreshFormButtons(q);
 }
 
 // אייקון ברשימת ההצעות: שליחת טופס מנות, או טעינת הבחירה כשהלקוח כבר מילא
@@ -1927,6 +1955,7 @@ function formAction(e, q) {
   const b = e.target.closest('[data-act]');
   if (b?.dataset.act === 'send-form') sendForm(q);
   if (b?.dataset.act === 'load-form') loadFromForm(q);
+  if (b?.dataset.act === 'cancel-form') cancelForm(q);
 }
 
 const FORMS_SETUP_MSG = 'כדי לשלוח טופס ללקוח צריך להריץ פעם אחת את הקובץ supabase-forms.sql ב-Supabase (הסבר ב-README)';
@@ -2024,6 +2053,292 @@ function sendNotifyTest(n) {
   fetch(`https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${text}&apikey=${encodeURIComponent(n.apikey.trim())}`, { mode: 'no-cors' })
     .then(() => toast('הבקשה נשלחה – בדקו שהגיעה הודעה בוואטסאפ (לפעמים לוקח דקה). אל תשכחו "שמירת הגדרות".'))
     .catch((err) => toast('השליחה נכשלה: ' + err.message, 'error'));
+}
+
+// ---------- כספים: הוצאות ורווח לפי אירוע ----------
+// אירוע = הצעה מאושרת. ההכנסה היא סכום ההצעה; ההוצאות – תחזית מההגדרות, או הסכום בפועל כשהוזן.
+const ils = (v) => formatILS(v);
+const monthKey = (q) => (eventDateKey(q) || '').slice(0, 7);
+const monthLabel = (k) => (k ? `${HEB_MONTHS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}` : 'ללא תאריך');
+
+function renderFinance() {
+  const f = state.financeFilter;
+  const events = sortQuotes(state.quotes.filter((q) => q.status === 'approved'), 'event');
+  const months = [...new Set(events.map(monthKey).filter(Boolean))].sort();
+  const now = today();
+  const pick = events.filter((q) => {
+    const k = eventDateKey(q);
+    if (f.period === 'upcoming') return !k || k >= now;
+    if (f.period === 'past') return k && k < now;
+    if (f.period === 'all') return true;
+    return monthKey(q) === f.period;
+  });
+  const rows = pick.map((q) => ({ q, p: eventProfit(q, orderOf(q), state.settings) }));
+  const sum = (k) => rows.reduce((s, r) => s + r.p[k], 0);
+  const profit = sum('profit');
+  const partners = (state.settings.expenses?.partners || []).filter((x) => String(x).trim());
+  const share = Math.round(profit / Math.max(1, partners.length));
+
+  $('#main').innerHTML = `
+    <div class="page-head"><h1>כספים</h1></div>
+    <p class="hint">רווח מכל אירוע מאושר: סכום ההצעה פחות ההוצאות. ההוצאות מחושבות מההגדרות (כוח אדם, חומרי גלם, דלק וגז) – ואפשר להזין בכל אירוע את הסכום בפועל. הרווח מתחלק שווה בשווה בין ${esc(partners.join(' ו') || 'השותפים')}.</p>
+    <div class="toolbar">
+      <select id="fin-period">
+        <option value="upcoming" ${f.period === 'upcoming' ? 'selected' : ''}>אירועים קרובים</option>
+        <option value="past" ${f.period === 'past' ? 'selected' : ''}>אירועים שעברו</option>
+        <option value="all" ${f.period === 'all' ? 'selected' : ''}>כל האירועים</option>
+        ${months.map((m) => `<option value="${m}" ${f.period === m ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="stats fin-stats">
+      <div class="stat wide"><b>${ils(sum('revenue'))}</b><span>הכנסות (${rows.length} אירועים)</span></div>
+      <div class="stat wide"><b>${ils(sum('expenses'))}</b><span>הוצאות</span></div>
+      <div class="stat wide"><b class="${profit < 0 ? 'neg' : ''}">${ils(profit)}</b><span>רווח</span></div>
+      ${partners.map((n) => `<div class="stat wide"><b class="${share < 0 ? 'neg' : ''}">${ils(share)}</b><span>ל${esc(n)}</span></div>`).join('')}
+    </div>
+    ${
+      rows.length
+        ? `<table class="quotes">
+            <thead><tr><th>תאריך</th><th>לקוח</th><th>אירוע</th><th>משתתפים</th><th>הכנסה</th><th>הוצאות</th><th>רווח</th><th>לכל שותף</th><th></th></tr></thead>
+            <tbody>${rows
+              .map(
+                ({ q, p }) => `<tr>
+                  <td data-l="תאריך">${esc(eventDateShort(q)) || '—'}</td>
+                  <td data-l="לקוח"><a href="#/finance/${q.id}"><b>${esc(q.customer?.name)}</b></a></td>
+                  <td data-l="אירוע">${esc(eventTypeLabel(q))}</td>
+                  <td data-l="משתתפים">${esc(guestsText(q)) || '—'}</td>
+                  <td data-l="הכנסה" class="money">${ils(p.revenue)}</td>
+                  <td data-l="הוצאות" class="money">${ils(p.expenses)} <span class="pill ${p.hasActual ? 'ok' : 'muted'}">${p.hasActual ? 'כולל בפועל' : 'צפי'}</span></td>
+                  <td data-l="רווח" class="money ${p.profit < 0 ? 'neg' : ''}"><b>${ils(p.profit)}</b> <small class="muted">${Math.round(p.margin * 100)}%</small></td>
+                  <td data-l="לכל שותף" class="money">${ils(p.partners[0].share)}</td>
+                  <td class="actions">
+                    <a class="icon" href="#/finance/${q.id}" title="הוצאות ורווח">💰</a>
+                    <a class="icon" href="#/shopping/${q.id}" title="רשימת קניות">🛒</a>
+                  </td>
+                </tr>`
+              )
+              .join('')}</tbody></table>`
+        : `<div class="empty"><p>אין אירועים מאושרים בתקופה הזו.</p></div>`
+    }`;
+  $('#fin-period').addEventListener('change', (e) => {
+    f.period = e.target.value;
+    renderFinance();
+  });
+}
+
+// דף אירוע: תחזית מול בפועל, נתוני האירוע (מרחק, עובדים) והוצאות נוספות
+function renderEventFinance(src) {
+  const q = clone(src);
+  q.costs ??= {};
+  const s = state.settings;
+  const exp = s.expenses || {};
+  const o = orderOf(q);
+
+  const draw = () => {
+    const p = eventProfit(q, o, s);
+    const d = p.detail;
+    $('#main').innerHTML = `
+      <div class="page-head">
+        <h1>הוצאות ורווח · ${esc(q.customer?.name)}</h1>
+        <div class="head-actions">
+          <a class="btn ghost" href="#/finance">→ כספים</a>
+          <a class="btn ghost" href="#/view/${q.id}">📄 הצעה ${esc(q.number)}</a>
+          ${o ? `<a class="btn ghost" href="#/order/${o.id}">📦 הזמנה</a>` : ''}
+          <a class="btn ghost" href="#/shopping/${q.id}">🛒 רשימת קניות</a>
+          <button class="btn primary" id="fin-save">שמירה</button>
+        </div>
+      </div>
+      <p class="hint">${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'} · ${esc(guestsText(q)) || '—'} · ${Math.round(d.hours.serving * 10) / 10} שעות הגשה${
+        o ? '' : ' · עדיין אין הזמנה – חומרי הגלם מחושבים לפי הפיצות שבהצעה'
+      }</p>
+      <div class="stats fin-stats">
+        <div class="stat wide"><b>${ils(p.revenue)}</b><span>הכנסה (סכום ההצעה)</span></div>
+        <div class="stat wide"><b>${ils(p.expenses)}</b><span>הוצאות${p.hasActual ? '' : ' (צפי)'}</span></div>
+        <div class="stat wide"><b class="${p.profit < 0 ? 'neg' : ''}">${ils(p.profit)}</b><span>רווח · ${Math.round(p.margin * 100)}%</span></div>
+        ${p.partners.map((x) => `<div class="stat wide"><b class="${x.share < 0 ? 'neg' : ''}">${ils(x.share)}</b><span>ל${esc(x.name)}</span></div>`).join('')}
+      </div>
+      <form id="fin-form" class="card" onsubmit="return false">
+        <h2>נתוני האירוע</h2>
+        <div class="grid four">
+          <label class="field"><span>מרחק לאירוע (ק״מ, כיוון אחד)</span><input type="number" inputmode="decimal" data-cost="distanceKm" value="${esc(q.costs.distanceKm ?? '')}" placeholder="${esc(exp.fuel?.distanceKm ?? '')}"></label>
+          ${(exp.staff || [])
+            .map(
+              (r, i) => `<label class="field"><span>מספר ${esc(r.name)}</span><input type="number" inputmode="numeric" min="0" data-staff="${i}" value="${esc(q.costs.staffCount?.[i] ?? '')}" placeholder="${esc(r.count)}"></label>`
+            )
+            .join('')}
+        </div>
+        <h2>הוצאות</h2>
+        <p class="hint">"צפי" מחושב מההגדרות. אחרי האירוע מזינים בעמודת "בפועל" את הסכום האמיתי – הרווח יחושב לפיו.</p>
+        <table class="fin-table">
+          <thead><tr><th>סעיף</th><th>פירוט</th><th>צפי</th><th>בפועל</th></tr></thead>
+          <tbody>${p.lines
+            .filter((l) => !l.extra)
+            .map(
+              (l) => `<tr>
+                <td><b>${esc(l.label)}</b></td>
+                <td class="muted">${esc(l.detail || '')}</td>
+                <td class="money">${ils(l.forecast)}</td>
+                <td><input type="number" inputmode="decimal" data-actual="${esc(l.key)}" value="${esc(q.costs.actual?.[l.key] ?? '')}" placeholder="${l.forecast}"></td>
+              </tr>`
+            )
+            .join('')}</tbody>
+        </table>
+        <h2>הוצאות נוספות באירוע</h2>
+        <div class="rows">
+          ${(q.costs.extra || [])
+            .map(
+              (x, i) => `<div class="row-item">
+                <label class="field grow"><span>תיאור</span><input data-extra-name="${i}" value="${esc(x.name || '')}" placeholder="למשל: חניה, עובד נוסף"></label>
+                <label class="field"><span>סכום</span><input type="number" inputmode="decimal" data-extra-amount="${i}" value="${esc(x.amount ?? '')}"></label>
+                <button type="button" class="icon danger" data-del-extra="${i}" title="הסרה">✕</button>
+              </div>`
+            )
+            .join('')}
+          <button type="button" class="btn small ghost" data-act="add-extra">+ הוצאה</button>
+        </div>
+        <div class="fin-total">
+          <div class="sum-row"><span>הכנסה</span><b>${ils(p.revenue)}</b></div>
+          <div class="sum-row"><span>סה״כ הוצאות</span><b>− ${ils(p.expenses)}</b></div>
+          <div class="sum-row total"><span>רווח</span><b>${ils(p.profit)}</b></div>
+          ${p.partners.map((x) => `<div class="sum-row"><span>${esc(x.name)}</span><b>${ils(x.share)}</b></div>`).join('')}
+        </div>
+      </form>`;
+
+    const form = $('#fin-form');
+    const val = (v) => (v === '' ? '' : Number(v));
+    form.addEventListener('change', (e) => {
+      const el = e.target;
+      if (el.dataset.cost) q.costs[el.dataset.cost] = val(el.value);
+      else if (el.dataset.staff != null) (q.costs.staffCount ??= {})[el.dataset.staff] = val(el.value);
+      else if (el.dataset.actual) (q.costs.actual ??= {})[el.dataset.actual] = val(el.value);
+      else if (el.dataset.extraName != null) q.costs.extra[el.dataset.extraName].name = el.value;
+      else if (el.dataset.extraAmount != null) q.costs.extra[el.dataset.extraAmount].amount = val(el.value);
+      else return;
+      state.dirty = true;
+      const y = window.scrollY;
+      draw();
+      window.scrollTo(0, y);
+    });
+    form.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.act === 'add-extra') (q.costs.extra ??= []).push({ name: '', amount: '' });
+      else if (b.dataset.delExtra != null) q.costs.extra.splice(+b.dataset.delExtra, 1);
+      else return;
+      state.dirty = true;
+      const y = window.scrollY;
+      draw();
+      window.scrollTo(0, y);
+    });
+    $('#fin-save').addEventListener('click', async () => {
+      busy(true, 'שומר...');
+      try {
+        // שומרים רק את נתוני ההוצאות על ההצעה העדכנית
+        const live = state.quotes.find((x) => x.id === q.id) || q;
+        live.costs = clone(q.costs);
+        await persist(live);
+        state.dirty = false;
+        toast('ההוצאות נשמרו');
+      } catch (err) {
+        toast('שגיאה בשמירה: ' + err.message, 'error');
+      } finally {
+        busy(false);
+      }
+    });
+  };
+  draw();
+}
+
+// ---------- רשימת קניות לאירוע ----------
+function shoppingText(q, list) {
+  const groups = groupBy(list, (x) => x.category || 'כללי');
+  return [
+    `🛒 רשימת קניות – ${q.customer?.name || ''} · ${eventTypeLabel(q)} · ${eventDateShort(q) || ''}`,
+    `${guestsText(q)}`,
+    ...Object.entries(groups).flatMap(([cat, items]) => ['', `*${cat}*`, ...items.map((x) => `• ${x.name} – ${x.qty} ${x.unit || ''}`.trim())]),
+  ].join('\n');
+}
+
+function groupBy(list, key) {
+  const out = {};
+  for (const x of list) (out[key(x)] ??= []).push(x);
+  return out;
+}
+
+function renderShopping(q) {
+  const o = orderOf(q);
+  const list = shoppingList(q, o, state.settings);
+  const groups = groupBy(list, (x) => x.category || 'כללי');
+  const total = list.reduce((s, x) => s + x.cost, 0);
+  const done = new Set(q.shoppingDone || []);
+
+  $('#main').innerHTML = `
+    <div class="page-head">
+      <h1>רשימת קניות · ${esc(q.customer?.name)}</h1>
+      <div class="head-actions">
+        <a class="btn ghost" href="#/finance/${q.id}">💰 הוצאות ורווח</a>
+        ${o ? `<a class="btn ghost" href="#/order/${o.id}">📦 הזמנה</a>` : ''}
+        <button class="btn ghost" id="sh-print">🖨 הדפסה</button>
+        <button class="btn primary" id="sh-wa">💬 שליחה בוואטסאפ</button>
+      </div>
+    </div>
+    <p class="hint">${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q)) || 'ללא תאריך'} · ${esc(guestsText(q)) || '—'}.
+      ${o ? 'לפי המנות שבהזמנה.' : '<b>עדיין אין הזמנה</b> – הרשימה לפי הפיצות שבהצעה; מנות שייבחרו בהזמנה יתווספו.'}
+      הכמויות והמחירים נקבעים בהגדרות ← רשימת קניות.</p>
+    ${
+      list.length
+        ? `<div class="card shop-list">${Object.entries(groups)
+            .map(
+              ([cat, items]) => `<h2>${esc(cat)}</h2>
+              ${items
+                .map(
+                  (x) => `<label class="shop-item ${done.has(x.name) ? 'done' : ''}">
+                    <input type="checkbox" data-done="${esc(x.name)}" ${done.has(x.name) ? 'checked' : ''}>
+                    <span class="shop-name">${esc(x.name)}${x.dish ? ` <small class="muted">(${esc(x.dish)})</small>` : ''}</span>
+                    <b class="shop-qty">${x.qty} ${esc(x.unit || '')}</b>
+                    <span class="shop-cost muted">${x.cost ? ils(x.cost) : ''}</span>
+                  </label>`
+                )
+                .join('')}`
+            )
+            .join('')}
+            ${total ? `<div class="sum-row total"><span>עלות משוערת</span><b>${ils(total)}</b></div>` : ''}
+          </div>`
+        : `<div class="empty"><p>אין עדיין פריטים ברשימת הקניות. מוסיפים אותם בהגדרות ← רשימת קניות.</p></div>`
+    }`;
+
+  $('.shop-list')?.addEventListener('change', async (e) => {
+    const name = e.target.dataset.done;
+    if (name == null) return;
+    e.target.closest('.shop-item').classList.toggle('done', e.target.checked);
+    const live = state.quotes.find((x) => x.id === q.id) || q;
+    const set = new Set(live.shoppingDone || []);
+    e.target.checked ? set.add(name) : set.delete(name);
+    live.shoppingDone = [...set];
+    try {
+      await persist(live);
+    } catch (err) {
+      toast('שמירת הסימון נכשלה: ' + err.message, 'error');
+    }
+  });
+  $('#sh-wa').addEventListener('click', () => {
+    const text = encodeURIComponent(shoppingText(q, list));
+    const w = window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener');
+    if (!w) location.href = `https://wa.me/?text=${text}`;
+  });
+  $('#sh-print').addEventListener('click', () => {
+    const w = window.open('', '_blank');
+    if (!w) return toast('הדפדפן חסם חלון חדש – אפשרו חלונות קופצים', 'error');
+    w.document.write(`<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>רשימת קניות</title>
+      <style>body{font-family:Arial,sans-serif;margin:24px;color:#222}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:16px 0 6px;border-bottom:1px solid #ccc}
+      .r{display:flex;gap:10px;padding:4px 0;border-bottom:1px dashed #ddd;font-size:14px}.r b{margin-inline-start:auto}.box{width:14px;height:14px;border:1.5px solid #555;border-radius:3px;flex:none;margin-top:2px}</style></head><body>
+      <h1>🛒 רשימת קניות – ${esc(q.customer?.name)}</h1><div>${esc(eventTypeLabel(q))} · ${esc(eventDateShort(q))} · ${esc(guestsText(q))}</div>
+      ${Object.entries(groups)
+        .map(([cat, items]) => `<h2>${esc(cat)}</h2>${items.map((x) => `<div class="r"><span class="box"></span><span>${esc(x.name)}</span><b>${x.qty} ${esc(x.unit || '')}</b></div>`).join('')}`)
+        .join('')}
+      <script>window.onload=function(){window.print()}<\/script></body></html>`);
+    w.document.close();
+  });
 }
 
 // ---------- לקוחות ----------
@@ -2253,6 +2568,81 @@ async function renderSettings() {
         </div>`
       ),
       sec(
+        '💰 הוצאות לאירוע (לתחזית ולחישוב הרווח)',
+        `<p class="hint">מכאן מחושבת תחזית ההוצאות של כל אירוע. <b>הערכים ההתחלתיים הם לדוגמה – עדכנו לפי המספרים שלכם.</b> בכל אירוע אפשר לשנות את המרחק ומספר העובדים, ולהזין הוצאות בפועל.</p>
+        <div class="grid">
+          <label class="field span2"><span>שמות השותפים (מופרדים בפסיק) – הרווח מתחלק ביניהם שווה בשווה</span>
+            <input data-partners value="${esc((s.expenses.partners || []).join(', '))}"></label>
+          ${field('שעות עבודה מעבר לזמן ההגשה (נסיעה, הקמה, פירוק)', 'expenses.setupHours', s, { type: 'number' })}
+          ${field('עלות חומרי גלם לאורח (כשאין מחירים ברשימת הקניות)', 'expenses.foodPerGuest', s, { type: 'number' })}
+        </div>
+        <h3>כוח אדם</h3>
+        <div class="rows">${(s.expenses.staff || [])
+          .map(
+            (r, i) => `<div class="row-item">
+            ${field('תפקיד', `expenses.staff.${i}.name`, s, { cls: 'grow' })}
+            ${field('מספר עובדים', `expenses.staff.${i}.count`, s, { type: 'number' })}
+            ${field('תשלום (₪)', `expenses.staff.${i}.rate`, s, { type: 'number' })}
+            ${field('לפי', `expenses.staff.${i}.type`, s, { options: [['hour', 'לשעה'], ['event', 'לאירוע']] })}
+            <button type="button" class="icon danger" data-del-staff="${i}" title="הסרה">✕</button>
+          </div>`
+          )
+          .join('')}
+          <button type="button" class="btn small ghost" data-act="add-staff">+ תפקיד</button>
+        </div>
+        <h3>דלק (הלוך וחזור)</h3>
+        <div class="grid">
+          ${field('מרחק ברירת מחדל לאירוע (ק״מ, כיוון אחד)', 'expenses.fuel.distanceKm', s, { type: 'number' })}
+          ${field('צריכה (ק״מ לליטר)', 'expenses.fuel.kmPerLiter', s, { type: 'number' })}
+          ${field('מחיר ליטר דלק (₪)', 'expenses.fuel.pricePerLiter', s, { type: 'number' })}
+        </div>
+        <h3>גז לטאבונים</h3>
+        <div class="grid">
+          ${field('מספר טאבונים', 'expenses.gas.ovens', s, { type: 'number' })}
+          ${field('צריכה לטאבון (ק״ג גז לשעה)', 'expenses.gas.kgPerHourPerOven', s, { type: 'number' })}
+          ${field('שעות חימום לפני ההגשה', 'expenses.gas.preheatHours', s, { type: 'number' })}
+          ${field('גודל בלון (ק״ג)', 'expenses.gas.cylinderKg', s, { type: 'number' })}
+          ${field('מחיר מילוי בלון (₪)', 'expenses.gas.cylinderPrice', s, { type: 'number' })}
+        </div>
+        <h3>הוצאות קבועות נוספות</h3>
+        <div class="rows">${(s.expenses.other || [])
+          .map(
+            (r, i) => `<div class="row-item">
+            ${field('הוצאה', `expenses.other.${i}.name`, s, { cls: 'grow' })}
+            ${field('סכום (₪)', `expenses.other.${i}.amount`, s, { type: 'number' })}
+            ${field('לפי', `expenses.other.${i}.per`, s, { options: [['event', 'לאירוע'], ['guest', 'לאורח']] })}
+            <button type="button" class="icon danger" data-del-other="${i}" title="הסרה">✕</button>
+          </div>`
+          )
+          .join('')}
+          <button type="button" class="btn small ghost" data-act="add-other">+ הוצאה</button>
+        </div>`
+      ),
+      sec(
+        '🛒 רשימת קניות – כמויות ומחירים',
+        `<p class="hint">כל שורה היא מוצר לקנייה. הכמות מחושבת לכל אירוע לפי מספר האורחים (ילד נספר כמו במחיר), שעות ההגשה והמנות שנבחרו.
+          "מתחלק בין סוגי הפיצות" – לתוספת של פיצה מסוימת: הכמות לאורח מתחלקת במספר סוגי הפיצות באירוע. "מנה" – המוצר נקנה רק אם המנה נבחרה.
+          המחירים משמשים לחישוב עלות חומרי הגלם. <b>הכמויות ההתחלתיות הן לדוגמה – עדכנו לפי המתכונים שלכם.</b></p>
+        <div class="rows">${(s.shopping || [])
+          .map(
+            (r, i) => `<div class="row-item shop-row">
+            ${field('מוצר', `shopping.${i}.name`, s, { cls: 'grow' })}
+            ${field('קטגוריה', `shopping.${i}.category`, s)}
+            ${field('יחידה', `shopping.${i}.unit`, s, { placeholder: 'ק״ג / יח׳' })}
+            ${field('כמות', `shopping.${i}.qty`, s, { type: 'number' })}
+            ${field('לפי', `shopping.${i}.per`, s, { options: PER_OPTIONS })}
+            ${field('רק כשנבחרה המנה', `shopping.${i}.dish`, s, {
+              options: [['', 'כל אירוע'], ...[...s.menu.pizzas, ...s.menu.starters, ...s.menu.desserts].map((x) => [x.name, x.name])],
+            })}
+            ${field('מחיר ליחידה (₪)', `shopping.${i}.price`, s, { type: 'number' })}
+            <button type="button" class="icon danger" data-del-shop="${i}" title="הסרה">✕</button>
+          </div>`
+          )
+          .join('')}
+          <button type="button" class="btn small ghost" data-act="add-shop">+ מוצר</button>
+        </div>`
+      ),
+      sec(
         '🔒 עלויות פנימיות ועמלות (לא מודפס)',
         `<div class="grid">
           ${field('עלות פנימית למשתתף', 'internal.costPerGuest', s, { type: 'number' })}
@@ -2327,6 +2717,10 @@ async function renderSettings() {
       s.menu[e.target.dataset.menu] = parseLines(e.target.value);
       markDirty();
     }
+    if (e.target.dataset.partners !== undefined) {
+      s.expenses.partners = e.target.value.split(',').map((x) => x.trim()).filter(Boolean);
+      markDirty();
+    }
     if (e.target.dataset.eventTypes !== undefined) {
       s.eventTypes = e.target.value.split(',').map((x) => x.trim()).filter(Boolean);
       if (!s.eventTypes.includes('אחר')) s.eventTypes.push('אחר');
@@ -2372,6 +2766,12 @@ async function renderSettings() {
       s.addons.push({ id: 'a' + Date.now().toString(36), name: '', category: '', price: 0, unit: 'qty' });
     else if (b.dataset.act === 'add-feature') s.features.push({ title: '', text: '' });
     else if (b.dataset.act === 'notify-test') return sendNotifyTest(s.notify);
+    else if (b.dataset.act === 'add-staff') s.expenses.staff.push({ name: '', count: 1, rate: 0, type: 'hour' });
+    else if (b.dataset.delStaff) s.expenses.staff.splice(+b.dataset.delStaff, 1);
+    else if (b.dataset.act === 'add-other') (s.expenses.other ??= []).push({ name: '', amount: 0, per: 'event' });
+    else if (b.dataset.delOther) s.expenses.other.splice(+b.dataset.delOther, 1);
+    else if (b.dataset.act === 'add-shop') (s.shopping ??= []).push({ name: '', category: '', unit: 'ק״ג', qty: 0, per: 'guest', dish: '', price: 0 });
+    else if (b.dataset.delShop) s.shopping.splice(+b.dataset.delShop, 1);
     else return;
     markDirty();
     draw();
